@@ -1,10 +1,10 @@
 """Transformer discovery: find transformer crates in GitLab projects and list their versions.
 
-A transformer crate is a folder whose Cargo.toml depends on `foundry-transformer`.
-Its In/Out schemas come from `transformer.yaml` (name, in, out, description) when the
-crate has one; otherwise they're inferred from `type In = X;` / `type Out = Y;` in the
-crate's sources, mapping the Rust type to its Schema::NAME via foundry-schemas, and the
-transformer carries a warning.
+A transformer is any folder with a `transformer.yaml` (name, in, out, description), in
+any language (foundry's TRANSFORMERS.md). Rust crates whose Cargo.toml depends on
+`foundry-transformer` count too even without one: their In/Out schemas are then inferred
+from `type In = X;` / `type Out = Y;` in the crate's sources, mapping the Rust type to its
+Schema::NAME via foundry-schemas, and the transformer carries a warning.
 """
 
 from __future__ import annotations
@@ -190,17 +190,18 @@ class Discovery:
         if head is None:
             return {}
         tree = await self.gitlab.list_tree(project, head["id"], recursive=True)
-        cargo = [
-            e for e in tree
-            if e["type"] == "blob" and posixpath.basename(e["path"]) == "Cargo.toml"
-            and "target" not in e["path"].split("/")
-        ]
+        build_dirs = {"target", "bin", "obj", "node_modules", ".venv"}
+        blobs = [e for e in tree if e["type"] == "blob" and not build_dirs & set(e["path"].split("/"))]
+        # Any language: a folder with transformer.yaml. Rust crates without one are found by their Cargo.toml.
+        declared = {posixpath.dirname(e["path"]) for e in blobs if posixpath.basename(e["path"]) == DECL_FILE}
+        cargo = [e for e in blobs if posixpath.basename(e["path"]) == "Cargo.toml"]
         texts = await asyncio.gather(*(self._blob(project, e["id"], e["path"], head["id"]) for e in cargo))
-        crates = [(posixpath.dirname(e["path"]), t) for e, t in zip(cargo, texts) if is_transformer_crate(t)]
-        infos = await asyncio.gather(*(self._crate(proj, head, path, text) for path, text in crates))
+        cargo_texts = {posixpath.dirname(e["path"]): t for e, t in zip(cargo, texts)}
+        folders = declared | {path for path, t in cargo_texts.items() if is_transformer_crate(t)}
+        infos = await asyncio.gather(*(self._crate(proj, head, path, cargo_texts.get(path)) for path in sorted(folders)))
         return {i.id: i for i in infos}
 
-    async def _crate(self, proj: dict, repo_head: dict, path: str, cargo_text: str) -> TransformerInfo:
+    async def _crate(self, proj: dict, repo_head: dict, path: str, cargo_text: str | None) -> TransformerInfo:
         project = proj["path_with_namespace"]
         # The crate's newest default-branch version is the last commit that touched its folder.
         head = await self.gitlab.last_commit(project, repo_head["id"], path) or repo_head
@@ -227,7 +228,7 @@ class Discovery:
             source=head_decl.source, warnings=head_decl.warnings, web_url=f"{web}/-/tree/{head['id']}/{path}".rstrip("/"),
         ))
         latest = versions[0]
-        name = head_decl.name or (posixpath.basename(path) if path else None) or cargo_package_name(cargo_text) or project
+        name = head_decl.name or (posixpath.basename(path) if path else None) or (cargo_text and cargo_package_name(cargo_text)) or project
         return TransformerInfo(
             id=f"{project}:{path}", project=project, path=path, name=name, description=head_decl.description,
             repo=proj["http_url_to_repo"], web_url=f"{web}/-/tree/{proj['default_branch']}/{path}".rstrip("/"),

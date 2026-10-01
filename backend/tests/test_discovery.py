@@ -74,6 +74,25 @@ async def test_unknown_types_and_non_transformer_crates(demo_root, fake, foundry
 
 
 @pytest.mark.anyio
+async def test_any_language_with_transformer_yaml(demo_root, fake, foundry):
+    commit(demo_root, {
+        "PacketEraser/transformer.yaml": "name: PacketEraser\nin: Packets\nout: Packets\ndescription: Erases data\n",
+        "PacketEraser/PacketEraser.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
+        "PacketEraser/Dockerfile": "FROM scratch\n",
+        "PacketEraser/bin/Release/transformer.yaml": "name: build output, not a transformer\n",
+        "Shout/transformer.yaml": "name: Shout\nin: Packets\nout: Packets\n",
+        "Shout/pyproject.toml": "[project]\nname = \"shout\"\n",
+    }, "C# and Python transformers")
+    found = await discovery(fake, foundry).scan_project(SKYWALKER)
+    for name in ("PacketEraser", "Shout"):
+        t = found[f"{SKYWALKER}:{name}"]
+        assert t.name == name and (t.input, t.output) == ("Packets", "Packets")
+        assert not t.inferred and not t.warnings
+    assert f"{SKYWALKER}:PacketEraser/bin/Release" not in found
+    assert f"{SKYWALKER}:XmlToJson" in found  # Rust crates are still found
+
+
+@pytest.mark.anyio
 async def test_crate_version_is_last_commit_touching_it(demo_root, fake, foundry):
     before = (await discovery(fake, foundry).scan_project(SKYWALKER))[f"{SKYWALKER}:Base64Decoder"].head
     commit(demo_root, {"XmlToJson/README.md": "only XmlToJson changes\n"}, "touch XmlToJson")
