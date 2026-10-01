@@ -1,0 +1,6 @@
+# Machine-readable declaration of this transformer for pipeline tooling (Foundry Studio).
+# Must match `type In` / `type Out` in src/main.rs; the names are foundry-schemas' Schema::NAME.
+name: Base64Decoder
+in: EncodedPackets
+out: Packets
+description: Decodes each packet's base64 data to UTF-8 text.

@@ -66,8 +66,9 @@ def build_services(settings: Settings) -> Services:
     if settings.fake_gitlab:
         from . import demo
 
+        # "demo" or a directory; a directory that doesn't exist yet gets fresh demo repos.
         fake_root = demo.DEFAULT_ROOT if settings.fake_gitlab == "demo" else Path(settings.fake_gitlab).resolve()
-        if settings.fake_gitlab == "demo" and not fake_root.exists():
+        if not fake_root.exists():
             demo.init(fake_root, settings.foundry_dir)
         gitlab: GitLab = FakeGitLab(fake_root)
     else:
@@ -224,6 +225,8 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
 
         @app.get("/{path:path}", include_in_schema=False)
         async def spa(path: str):
+            if path.startswith("api/"):
+                raise HTTPException(404)
             f = (dist / path).resolve()
             return FileResponse(f if path and f.is_file() and dist in f.parents else dist / "index.html")
 

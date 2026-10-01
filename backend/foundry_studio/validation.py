@@ -114,8 +114,11 @@ class Validator:
         errors = run(existing + [(source, target)])
         mine = [e for e in errors if e.startswith(prefix)]
         if not mine:
-            before = {e for e in run(existing) if e.startswith("Relation: cycle")}
-            mine = [e for e in errors if e.startswith("Relation: cycle") and e not in before]
+            # Graph-level errors this edge would introduce: a cycle, or a transformer
+            # that would publish to OutputSink and feed internal steps at once.
+            before = set(run(existing))
+            caused = ("Relation: cycle", f"Transformers.{source}: feeds both")
+            mine = [e for e in errors if e.startswith(caused) and e not in before]
         if mine:
             return {"ok": False, "message": mine[0], "errors": [self.foundry.locate(m) for m in mine]}
         return {"ok": True, "message": None}

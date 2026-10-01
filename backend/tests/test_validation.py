@@ -107,6 +107,11 @@ def test_check_edge_uses_deploy_messages(foundry):
                        "transformer": {"IN": "Packets", "OUT": "EncodedPackets"}})
     g["edges"] += [{"source": "Base64Decoder", "target": "Loop"}]
     assert v.check_edge(g, "Loop", "Base64Decoder")["message"].startswith("Relation: cycle detected")
+    g["edges"] += [{"source": "Base64Decoder", "target": "OutputSink"}]
+    assert v.check_edge(g, "XmlToJson", "OutputSink")["message"].startswith("Relation 'XmlToJson -> OutputSink': type")
+    g["nodes"].append({"id": "Tee", "kind": "transformer", "transformer": {"IN": "Packets", "OUT": "Packets"}})
+    assert v.check_edge(g, "Base64Decoder", "Tee")["message"].startswith(
+        "Transformers.Base64Decoder: feeds both OutputSink and Loop, Tee")
 
 
 def test_untyped_sink_does_not_block_wiring(foundry):

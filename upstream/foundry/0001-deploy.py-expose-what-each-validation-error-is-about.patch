@@ -1,0 +1,67 @@
+From cd11359da36f7eff6ff1c6f43530c6c7abd44f6c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 1 Oct 2026 16:06:15 +0000
+Subject: [PATCH] deploy.py: expose what each validation error is about
+ (locate, ManifestError.issues)
+
+Graph editors (Foundry Studio) import deploy.py to validate manifests and need
+to point at the node or edge each error names. locate() parses the 'where'
+prefix every message already has; it lives here so the messages and the
+parser can't drift apart. The CLI doesn't call it: its output is unchanged.
+---
+ deploy.py | 39 +++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 39 insertions(+)
+
+diff --git a/deploy.py b/deploy.py
+index 5a3fe95..c1524a2 100644
+--- a/deploy.py
++++ b/deploy.py
+@@ -57,6 +57,45 @@ class ManifestError(Exception):
+         self.errors = errors
+         super().__init__("\n".join(errors))
+ 
++    @property
++    def issues(self) -> list[dict]:
++        """The errors with what each one is about; see locate()."""
++        return [locate(e) for e in self.errors]
++
++
++_EDGE_RE = re.compile(r"^Relation '(.+?) -> (.+?)'")
++_CYCLE_RE = re.compile(r"^Relation: cycle detected among (.+)$")
++_TRANSFORMER_RE = re.compile(r"^Transformers\.([^.:\s]+)")
++_SINK_RE = re.compile(r"^(InputSink|OutputSink)\b(?:\.([^:]+))?")
++
++
++def locate(message: str) -> dict:
++    """What a validation error is about, for tools that point at it (e.g. a graph editor).
++
++    Returns {"message", "node", "edge", "nodes", "field"}: the node or edge ("A", "B")
++    the message names, every node involved, and the manifest field when there is one.
++    Kept next to the messages so the two can't drift apart. The CLI doesn't use it.
++    """
++    issue: dict = {"message": message, "node": None, "edge": None, "nodes": [], "field": None}
++    if m := _EDGE_RE.match(message):
++        issue["edge"] = [m.group(1), m.group(2)]
++        issue["nodes"] = [m.group(1), m.group(2)]
++    elif m := _CYCLE_RE.match(message):
++        issue["nodes"] = [n.strip() for n in m.group(1).split(",")]
++    elif m := _TRANSFORMER_RE.match(message):
++        issue["node"] = m.group(1)
++        rest = message[len(m.group(0)):]
++        if rest.startswith(".") and (f := re.match(r"\.([^:]+):", rest)):
++            issue["field"] = f.group(1)
++    elif m := _SINK_RE.match(message):
++        issue["node"] = m.group(1)
++        issue["field"] = m.group(2)
++    elif message.startswith(("Defaults", "Name", "Schemas", "manifest", "Relation")):
++        issue["field"] = message.split(":", 1)[0]
++    if issue["node"] and not issue["nodes"]:
++        issue["nodes"] = [issue["node"]]
++    return issue
++
+ 
+ # --------------------------------------------------------------------------- #
+ # Manifest model + validation
+-- 
+2.43.0
+
