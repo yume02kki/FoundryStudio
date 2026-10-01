@@ -3,4 +3,4 @@
 name: XmlToJson
 in: XmlPackets
 out: EncodedPackets
-description: Converts <packet> XML to JSON; data stays base64-encoded.
+description: Same record, different wire format (XML to JSON); data stays base64.

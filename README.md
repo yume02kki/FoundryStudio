@@ -193,16 +193,16 @@ exists, the node shows an update badge. Click it to open the version picker.
 ## Changes proposed upstream
 
 Studio works against foundry, skywalker and PipelineDeploys as they are. Two small merge requests
-make it better. They're prepared in `upstream/` (this session had no GitLab token, so they haven't
-been opened yet):
+make it better. Their content is kept in `upstream/`:
 
-| Repo | Change | Why |
-|---|---|---|
-| foundry | `upstream/foundry/0001-…patch`: `deploy.locate()` + `ManifestError.issues` | Says which node or edge each error is about, next to the messages. CLI output is unchanged (verified byte for byte). Studio already prefers `deploy.locate` when present. |
-| skywalker | `upstream/skywalker/*/transformer.yaml` | Declares In/Out for XmlToJson and Base64Decoder, which removes the ⚠ inferred badge. Only new tags change their content hash; v0.4.2 is unaffected. |
+| Repo | Merge request | Change | Why |
+|---|---|---|---|
+| foundry | [foundry!1](https://gitlab.com/yume02kki/foundry/-/merge_requests/1) | `deploy.locate()` + `ManifestError.issues` | Says which node or edge each error is about, next to the messages. CLI output is unchanged (verified byte for byte). Optional: Studio carries the same parser and prefers `deploy.locate` when present. |
+| skywalker | [skywalker!1](https://gitlab.com/yume02kki/skywalker/-/merge_requests/1) | `transformer.yaml` for XmlToJson and Base64Decoder, plus a README note | Declares In/Out, which removes the ⚠ inferred badge. Only new tags change their content hash; v0.4.2 is unaffected. |
 
-Each folder has a `MERGE_REQUEST.md` with the full rationale. To open both (new branches and merge
-requests only, never `main`):
+Each folder has a `MERGE_REQUEST.md` with the full rationale. `scripts/open_upstream_mrs.py` opened
+them (new branches and merge requests only, never `main`); it refuses to run again while the
+branches exist:
 
 ```sh
 GITLAB_TOKEN=… python3 scripts/open_upstream_mrs.py         # dry run: clones, applies, shows the diff

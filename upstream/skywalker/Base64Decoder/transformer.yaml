@@ -3,4 +3,4 @@
 name: Base64Decoder
 in: EncodedPackets
 out: Packets
-description: Decodes each packet's base64 data to UTF-8 text.
+description: Decodes data to UTF-8 text; packets whose bytes aren't valid UTF-8 are dropped with a warning.
