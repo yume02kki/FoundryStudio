@@ -1,6 +1,0 @@
-# Machine-readable declaration of this transformer for pipeline tooling (Foundry Studio).
-# Must match `type In` / `type Out` in src/main.rs; the names are foundry-schemas' Schema::NAME.
-name: XmlToJson
-in: XmlPackets
-out: EncodedPackets
-description: Same record, different wire format (XML to JSON); data stays base64.

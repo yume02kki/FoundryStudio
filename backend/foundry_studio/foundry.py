@@ -15,11 +15,6 @@ from functools import cached_property
 from pathlib import Path
 from types import ModuleType
 
-_SCHEMA_IMPL_RE = re.compile(
-    r"impl\s+Schema\s+for\s+(\w+)\s*\{.*?const\s+NAME\s*:\s*&(?:'static\s+)?str\s*=\s*\"([^\"]+)\"",
-    re.S,
-)
-
 DATASET = "dataset:"  # node id prefix of a dataset on the canvas
 
 
@@ -95,15 +90,6 @@ class Foundry:
     @property
     def example_manifest(self) -> Path:
         return self.root / "PipelineManifest.yaml"
-
-    @cached_property
-    def rust_schema_names(self) -> dict[str, str]:
-        """Rust type -> Schema::NAME, for transformer crates built on the old Rust SDK (if foundry still has it)."""
-        for p in (self.root / "sdk" / "rust" / "foundry-schemas" / "src" / "lib.rs",
-                  self.root / "sdk" / "foundry-schemas" / "src" / "lib.rs"):
-            if p.is_file():
-                return {m.group(1): m.group(2) for m in _SCHEMA_IMPL_RE.finditer(p.read_text())}
-        return {"XmlPacket": "XmlPackets", "EncodedPacket": "EncodedPackets", "Packet": "Packets"}
 
     def locate(self, message: str) -> dict:
         return locate(message)

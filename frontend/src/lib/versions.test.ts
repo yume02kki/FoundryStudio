@@ -25,7 +25,6 @@ const info = (versions: Version[]): TransformerInfo => ({
   web_url: "",
   input: "EncodedPackets",
   output: "Packets",
-  inferred: false,
   warnings: [],
   latest: versions[0].ref,
   head: versions[versions.length - 1].commit,

@@ -20,7 +20,7 @@ SCHEMAS = {"XmlPackets", "EncodedPackets", "Packets"}
 
 def make_watcher(fake, projects=None):
     bus = EventBus()
-    w = Watcher(fake, Discovery(fake, {}, lambda: SCHEMAS), bus, projects, poll_interval=0.01,
+    w = Watcher(fake, Discovery(fake, lambda: SCHEMAS), bus, projects, poll_interval=0.01,
                 discovery_interval=0)
     return w, bus, bus.subscribe()
 
@@ -64,7 +64,7 @@ async def test_new_tag_new_folder_and_removal(demo_root, fake):
     [ev] = drain(q)
     assert ev["type"] == "transformer.added"
     t = ev["transformer"]
-    assert (t["name"], t["input"], t["output"], t["inferred"]) == ("Deduplicate", "Packets", "Packets", False)
+    assert (t["name"], t["input"], t["output"], t["warnings"]) == ("Deduplicate", "Packets", "Packets", [])
 
     demo.remove(demo_root, "Deduplicate")
     await w.poll_once()

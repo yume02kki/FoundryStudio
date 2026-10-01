@@ -168,8 +168,8 @@ description: Converts <packet> XML to JSON; data stays base64-encoded.
 ```
 
 A transformer's versions are its `<Path>/v*` tags (newest semver first) plus the last
-default-branch commit that touched its folder. Rust crates from before `transformer.yaml` are
-still found; their types are inferred and marked **⚠ inferred**.
+default-branch commit that touched its folder. A transformer or version with a problem (no
+`transformer.yaml` in that version, a schema not in the catalog) is marked **⚠**.
 
 Projects with transformers are **polled** every `STUDIO_POLL_INTERVAL` seconds (the events API);
 every project is rescanned every `STUDIO_FULL_RESCAN_INTERVAL`. Changes reach the browser over
@@ -243,7 +243,7 @@ backend/foundry_studio/
   manifest.py      graph <-> manifest, catalog <-> catalog.yaml (canonical writers)
   validation.py    staging + deploy.load_pipeline, edge checks, dataset endpoints
   pipelines.py     the workspace: catalog, pipelines, deploys
-  discovery.py     transformer.yaml folders, versions, inference for old Rust crates
+  discovery.py     transformer.yaml folders and their versions
   watcher.py       every member project: polling + webhooks -> event bus
   peek.py          Live data: read-only topic feeds, schema checks
   gitlab.py        GitLab REST client
@@ -255,6 +255,6 @@ frontend/src/
                    Inspector, TopBar, LiveData, Dialogs (deploy panel)
   lib/             rules (wiring), stages/pairing/diff, versions, layout, feed health, schema colours
   store.ts         zustand store
-upstream/          merge request material for foundry and skywalker
+upstream/          merge request material for foundry
 vendor/foundry     foundry (submodule)
 ```

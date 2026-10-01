@@ -71,8 +71,7 @@ class Services:
         self.workspace = workspace or settings.workspace or REPO_ROOT / "workspace"
         self.validator = Validator(foundry)
         self.pipelines = PipelineStore(foundry, self.workspace, deploy_target or settings.deploy_target)
-        self.discovery = Discovery(gitlab, foundry.rust_schema_names,
-                                   lambda: set(self.pipelines.catalog()["schemas"]))
+        self.discovery = Discovery(gitlab, lambda: set(self.pipelines.catalog()["schemas"]))
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.transformer_projects,
                                settings.poll_interval, settings.full_rescan_interval)

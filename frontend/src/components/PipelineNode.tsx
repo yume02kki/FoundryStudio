@@ -66,9 +66,9 @@ function TransformerNodeView({ id, data, selected }: NodeProps<PNode>) {
     >
       <div className="pnode-head">
         <span className="pnode-kind">⚙ Transformer</span>
-        {info?.inferred && (
+        {info && info.warnings.length > 0 && (
           <span className="badge badge-warn" title={info.warnings.join("\n")}>
-            ⚠ inferred
+            ⚠
           </span>
         )}
         {!info && (

@@ -103,7 +103,7 @@ function Card({ t, favorite, onFavorite }: { t: TransformerInfo; favorite: boole
         <SchemaChip schema={version.input} /> <span className="arrow">→</span> <SchemaChip schema={version.output} />
       </div>
       <div className="card-foot">
-        {t.inferred && (
+        {t.warnings.length > 0 && (
           <span className="badge badge-warn" title={t.warnings.join("\n")}>
             ⚠
           </span>

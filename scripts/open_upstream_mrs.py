@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Open the two upstream merge requests Foundry Studio relies on.
+"""Open the upstream merge request Foundry Studio relies on.
 
     GITLAB_TOKEN=... python3 scripts/open_upstream_mrs.py          # dry run: prepare and show
     GITLAB_TOKEN=... python3 scripts/open_upstream_mrs.py --yes    # push branches, open MRs
 
-* foundry:   upstream/foundry/*.patch            -> branch studio/structured-errors
-* skywalker: upstream/skywalker/<Crate>/*.yaml    -> branch studio/transformer-yaml
+* foundry: upstream/foundry/*.patch -> branch studio/structured-errors
 
 Each change goes to a new branch and a merge request; nothing is ever pushed to main.
 The token needs write_repository (push) and api (open the MR). It reaches git through a
@@ -17,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -32,8 +30,7 @@ GITLAB = os.environ.get("GITLAB_URL", "https://gitlab.com").rstrip("/")
 HELPER = '!f() { test "$1" = get && printf "username=oauth2\\npassword=%s\\n" "$GITLAB_TOKEN"; }; f'
 
 CHANGES = [
-    {"project": "yume02kki/foundry", "branch": "studio/structured-errors", "dir": UPSTREAM / "foundry", "kind": "patch"},
-    {"project": "yume02kki/skywalker", "branch": "studio/transformer-yaml", "dir": UPSTREAM / "skywalker", "kind": "files"},
+    {"project": "yume02kki/foundry", "branch": "studio/structured-errors", "dir": UPSTREAM / "foundry"},
 ]
 
 
@@ -64,18 +61,8 @@ def prepare(change: dict, work: Path) -> Path:
     if git("ls-remote", "--heads", "origin", change["branch"], cwd=repo):
         sys.exit(f"{change['project']}: branch {change['branch']} already exists; delete it or merge its MR first")
     git("checkout", "--quiet", "-b", change["branch"], "origin/HEAD", cwd=repo)
-    if change["kind"] == "patch":
-        for patch in sorted(change["dir"].glob("*.patch")):
-            git("am", "--quiet", "--3way", str(patch), cwd=repo)
-    else:
-        for f in sorted(change["dir"].rglob("*")):
-            if f.is_file() and f.name != "MERGE_REQUEST.md":
-                dest = repo / f.relative_to(change["dir"])
-                if not dest.parent.is_dir():
-                    sys.exit(f"{change['project']}: {dest.parent.name}/ doesn't exist on main; refusing to create it")
-                shutil.copyfile(f, dest)
-        git("add", "-A", cwd=repo)
-        git("commit", "--quiet", "-m", "Declare each transformer's In/Out schemas in transformer.yaml", cwd=repo)
+    for patch in sorted(change["dir"].glob("*.patch")):
+        git("am", "--quiet", "--3way", str(patch), cwd=repo)
     return repo
 
 

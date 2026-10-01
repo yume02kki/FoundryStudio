@@ -112,7 +112,6 @@ export interface TransformerInfo {
   web_url: string;
   input: string | null;
   output: string | null;
-  inferred: boolean;
   warnings: string[];
   latest: string;
   head: string;

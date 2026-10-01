@@ -5,15 +5,15 @@ from __future__ import annotations
 import pytest
 
 from foundry_studio import demo
-from foundry_studio.discovery import Discovery, is_transformer_crate, semver_key
+from foundry_studio.discovery import Discovery, semver_key
 
-from .conftest import SKYWALKER, legacy_rust_crate
+from .conftest import SKYWALKER
 
 SCHEMAS = {"XmlPackets", "EncodedPackets", "Packets"}
 
 
 def discovery(fake, foundry) -> Discovery:
-    return Discovery(fake, foundry.rust_schema_names, lambda: SCHEMAS)
+    return Discovery(fake, lambda: SCHEMAS)
 
 
 def commit(root, files: dict[str, str], message: str, tag: str | None = None):
@@ -27,31 +27,16 @@ def commit(root, files: dict[str, str], message: str, tag: str | None = None):
         demo._git(repo, "tag", tag)
 
 
-def test_rust_schema_names(foundry):
-    assert foundry.rust_schema_names == {
-        "XmlPacket": "XmlPackets", "EncodedPacket": "EncodedPackets", "Packet": "Packets",
-    }
-
-
 @pytest.mark.anyio
 async def test_discovers_csharp_transformers(fake, foundry):
     found = await discovery(fake, foundry).scan_project(SKYWALKER)
     assert set(found) == {f"{SKYWALKER}:XmlToJson", f"{SKYWALKER}:Base64Decoder"}
     x = found[f"{SKYWALKER}:XmlToJson"]
     assert (x.name, x.input, x.output, x.latest) == ("XmlToJson", "XmlPackets", "EncodedPackets", "XmlToJson/v0.4.2")
-    assert not x.inferred and not x.warnings and x.description.startswith("Converts XML")
+    assert not x.warnings and x.description.startswith("Converts XML")
     assert x.repo == "https://gitlab.com/yume02kki/skywalker.git"
     assert [v.kind for v in x.versions] == ["tag", "branch"]
     assert x.versions[-1].ref == x.head and len(x.head) == 40
-
-
-@pytest.mark.anyio
-async def test_legacy_rust_crates_with_fallback_warning(demo_root, fake, foundry):
-    commit(demo_root, {f"Legacy/{k}": v for k, v in legacy_rust_crate("Legacy", "Packets", "Packets").items()},
-           "legacy crate")
-    legacy = (await discovery(fake, foundry).scan_project(SKYWALKER))[f"{SKYWALKER}:Legacy"]
-    assert (legacy.input, legacy.output) == ("Packets", "Packets")
-    assert legacy.inferred and "inferred from src/main.rs" in legacy.warnings[0]
 
 
 @pytest.mark.anyio
@@ -63,22 +48,8 @@ async def test_transformer_yaml_wins_and_versions_sort_by_semver(demo_root, fake
     commit(demo_root, {"XmlToJson/y.cs": "// other\n"}, "unrelated tag", tag="XmlToJsonExtra/v9.9.9")
     found = await discovery(fake, foundry).scan_project(SKYWALKER)
     x = found[f"{SKYWALKER}:XmlToJson"]
-    assert not x.inferred and x.description == "XML to JSON"
+    assert x.description == "XML to JSON"
     assert [v.label for v in x.versions if v.kind == "tag"] == ["v0.10.1-rc.1", "v0.10.0", "v0.4.2"]
-
-
-@pytest.mark.anyio
-async def test_unknown_types_and_non_transformer_crates(demo_root, fake, foundry):
-    files = legacy_rust_crate("Custom", "Mystery", "Packets")
-    commit(demo_root, {f"tools/Custom/{k}": v for k, v in files.items()} | {
-        "tools/cli/Cargo.toml": '[package]\nname = "cli"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n',
-        "Cargo.toml": '[workspace]\nmembers = ["XmlToJson"]\n',
-    }, "more crates")
-    found = await discovery(fake, foundry).scan_project(SKYWALKER)
-    assert f"{SKYWALKER}:tools/cli" not in found and f"{SKYWALKER}:" not in found
-    custom = found[f"{SKYWALKER}:tools/Custom"]
-    assert custom.input is None and custom.output == "Packets"
-    assert any("Mystery is not a foundry-schemas type" in w for w in custom.warnings)
 
 
 @pytest.mark.anyio
@@ -94,7 +65,7 @@ async def test_any_language_with_transformer_yaml(demo_root, fake, foundry):
     found = await discovery(fake, foundry).scan_project(SKYWALKER)
     t = found[f"{SKYWALKER}:PacketEraser"]
     assert t.name == "PacketEraser" and (t.input, t.output) == ("Packets", "Packets")
-    assert not t.inferred and not t.warnings
+    assert not t.warnings
     shout = found[f"{SKYWALKER}:Shout"]
     assert shout.warnings == ["transformer.yaml out: 'Bogus' is not a schema in the catalog"]
     assert f"{SKYWALKER}:PacketEraser/bin/Release" not in found
@@ -109,10 +80,5 @@ async def test_crate_version_is_last_commit_touching_it(demo_root, fake, foundry
     assert before == after
 
 
-def test_cargo_detection():
-    assert is_transformer_crate('[package]\nname="a"\n[dependencies]\nfoundry-transformer = { path = "x" }\n')
-    assert is_transformer_crate('[package]\nname="a"\n[dependencies.foundry-transformer]\ngit = "x"\n')
-    assert is_transformer_crate('[package]\nname="a"\n[dependencies]\nsdk = { package = "foundry-transformer" }\n')
-    assert not is_transformer_crate('[package]\nname="a"\n[dev-dependencies]\nfoundry-transformer = "1"\n')
-    assert not is_transformer_crate('[workspace]\n[workspace.dependencies]\nfoundry-transformer = "1"\n')
+def test_semver_order():
     assert semver_key("v1.2.3") > semver_key("v1.2.3-rc.1") > semver_key("v1.2.2")
