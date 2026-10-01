@@ -74,7 +74,7 @@ export type PeekEvent =
 
 /** Read-only live feed of a sink topic (POST + streamed Server-Sent Events). Resolves when the stream ends. */
 export async function peek(graph: Graph, node: string, onEvent: (e: PeekEvent) => void, signal: AbortSignal) {
-  const res = await fetch("/api/peek", {
+  const res = await fetch("api/peek", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ graph, node }),

@@ -23,7 +23,7 @@ from .fake_gitlab import FakeGitLab
 from .foundry import Foundry
 from .gitlab import GitLab, HttpGitLab
 from .manifest import SINK, SOURCE, graph_to_manifest
-from .peek import FormatChecker, PeekError, client_config, demo_feed, kafka_feed
+from .peek import FormatChecker, PeekError, bind, client_config, demo_feed, kafka_feed
 from .pipelines import PipelineError, PipelineStore
 from .validation import Validator
 from .watcher import EventBus, Watcher
@@ -246,7 +246,8 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             feed = demo_feed(ontology, topic, checker, stop)
         else:
             try:
-                cfg = client_config(sink.get("ConnectionSettings") or {}, s.settings.secrets_dir)
+                conn = bind(sink.get("ConnectionSettings") or {}, s.settings.kafka_clusters)
+                cfg = client_config(conn, s.settings.secrets_dir)
             except PeekError as e:
                 feed = _single({"type": "status", "state": "error", "message": str(e)})
             else:

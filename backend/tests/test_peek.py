@@ -19,7 +19,7 @@ from fastapi.testclient import TestClient
 from foundry_studio.app import Services, create_app
 from foundry_studio.config import Settings
 from foundry_studio.manifest import manifest_to_graph
-from foundry_studio.peek import FormatChecker, PeekError, client_config, demo_feed, kafka_feed
+from foundry_studio.peek import FormatChecker, PeekError, bind, client_config, demo_feed, kafka_feed
 
 from .conftest import FOUNDRY_DIR
 
@@ -63,6 +63,21 @@ def test_client_config_mirrors_the_runtime(tmp_path):
 def test_client_config_errors(settings, message, tmp_path):
     with pytest.raises(PeekError, match=message.replace("(", r"\(")):
         client_config(settings, tmp_path)
+
+
+def test_bind_uses_this_environments_cluster(tmp_path):
+    from foundry_studio.config import load_clusters
+
+    f = tmp_path / "watcher.yaml"
+    f.write_text("repo: x\nclusters:\n  - match: upstream-kafka:9092\n    bootstrap: kafka:19092\n"
+                 "    connection: {Brokers: \"localhost:9092\", SecurityProtocol: PLAINTEXT}\n")
+    clusters = load_clusters(f)
+    manifest = {"Brokers": "upstream-kafka:9092", "SecurityProtocol": "SASL_SSL", "SaslMechanism": "SCRAM-SHA-512",
+                "SecretRef": "upstream-kafka-creds", "ConsumerGroup": "swpipeline"}
+    assert bind(manifest, clusters) == {"Brokers": "localhost:9092", "SecurityProtocol": "PLAINTEXT"}
+    cfg = client_config(bind(manifest, clusters), tmp_path)
+    assert cfg["bootstrap.servers"] == "localhost:9092" and "sasl.username" not in cfg
+    assert bind({"Brokers": "elsewhere:9092"}, clusters) == {"Brokers": "elsewhere:9092"}
 
 
 def test_format_checks():
