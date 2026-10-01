@@ -50,7 +50,7 @@ class Validator:
                 errors = [self.foundry.locate(m.replace(str(manifest), "manifest.yaml")) for m in e.errors]
                 return {"ok": False, "errors": errors, "manifest": manifest_text,
                         "topics": self.topics(graph), "summary": None}
-        endpoints = self.deploy.build_endpoints(p)
+        endpoints = self.deploy.endpoints(p)
         internal = sorted(k for k in endpoints if k not in self.deploy.SINKS)
         return {
             "ok": True, "errors": [], "manifest": manifest_text, "topics": self.topics(graph),
@@ -74,19 +74,19 @@ class Validator:
                 sink = n.get("sink") or {}
                 sinks[n["id"]] = {"Ontology": sink.get("Ontology"), "Topic": sink.get("Topic") or ""}
         return d.Pipeline(
-            name=str(graph.get("name") or "Pipeline"), base_dir=Path("."), raw={}, schemas={}, defaults={},
+            name=str(graph.get("name") or "Pipeline"), base_dir=Path("."), schemas={}, defaults={}, order=[],
             input_sink=sinks[SOURCE], output_sink=sinks[SINK], transformers=transformers, edges=edges,
         )
 
     def topics(self, graph: dict) -> dict[str, dict]:
-        """The topic each edge carries, per deploy.endpoint_id (internal ones are generated)."""
+        """The topic each edge carries, per Pipeline.writes_to (internal ones are generated)."""
         edges = [(e["source"], e["target"]) for e in graph.get("edges", [])]
         p = self._pipeline(graph, edges)
         out = {}
         for u, v in edges:
             if u != SOURCE and u not in p.transformers:
                 continue
-            ep = self.deploy.endpoint_id(p, u)
+            ep = p.writes_to(u)
             if ep in self.deploy.SINKS:
                 topic = (p.input_sink if ep == SOURCE else p.output_sink).get("Topic") or ""
                 out[f"{u}->{v}"] = {"topic": topic, "internal": False}
@@ -97,14 +97,14 @@ class Validator:
     def endpoint(self, graph: dict, node: str) -> dict:
         """The topic a node writes (for a sink: the sink's own topic), and how to connect to it.
 
-        Uses deploy.endpoint_id, so a transformer's output is exactly the topic deploy.py
+        Uses deploy.py's Pipeline.writes_to, so a transformer's output is exactly the topic deploy.py
         generates: <Pipeline>.<Transformer>.out, or OutputSink's topic when it feeds it.
         """
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
         if node not in nodes:
             raise ValueError(f"unknown node {node!r}")
         edges = [(e["source"], e["target"]) for e in graph.get("edges", [])]
-        ep = node if node in (SOURCE, SINK) else self.deploy.endpoint_id(self._pipeline(graph, edges), node)
+        ep = node if node in (SOURCE, SINK) else self._pipeline(graph, edges).writes_to(node)
         if ep in (SOURCE, SINK):
             sink = nodes.get(ep, {}).get("sink") or {}
             return {"endpoint": ep, "topic": str(sink.get("Topic") or ""), "schema": sink.get("Ontology"),
@@ -120,7 +120,7 @@ class Validator:
 
         def run(edges):
             errors: list[str] = []
-            self.deploy._validate_graph(self._pipeline(graph, edges), errors)
+            self.deploy.validate_graph(self._pipeline(graph, edges), errors)
             return errors
 
         p = self._pipeline(graph, existing)

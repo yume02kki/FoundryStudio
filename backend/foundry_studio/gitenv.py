@@ -48,15 +48,16 @@ while i < len(args):
     else:
         opts[a[2:]] = args[i + 1]; i += 2
 project = os.environ["STUDIO_GLAB_PROJECT"]
+target = opts.get("target-branch") or os.environ.get("STUDIO_GLAB_TARGET", "main")
 fake_root = os.environ.get("STUDIO_FAKE_GITLAB_ROOT")
 if fake_root:
     sys.path.insert(0, {backend!r})
     from foundry_studio.fake_gitlab import FakeGitLab
     mr = FakeGitLab(fake_root).create_merge_request(
-        project, opts["source-branch"], opts["target-branch"], opts["title"], opts.get("description", ""))
+        project, opts["source-branch"], target, opts["title"], opts.get("description", ""))
 else:
     base = os.environ.get("GITLAB_URL", "https://gitlab.com").rstrip("/")
-    body = {{"source_branch": opts["source-branch"], "target_branch": opts["target-branch"],
+    body = {{"source_branch": opts["source-branch"], "target_branch": target,
             "title": opts["title"], "description": opts.get("description", ""),
             "remove_source_branch": bool(opts.get("remove-source-branch"))}}
     req = urllib.request.Request(
@@ -81,10 +82,11 @@ def write_glab_shim(directory: Path) -> Path:
     return path
 
 
-def configure(env: dict, *, gitlab_url: str, deploys_project: str, shim_dir: Path,
+def configure(env: dict, *, gitlab_url: str, deploys_project: str, shim_dir: Path, deploys_base: str = "main",
               fake_root: Path | None = None, fake_projects: list[str] = (), web_base: str = "https://gitlab.com") -> None:
     """Mutates env (normally os.environ) so deploy.py's child processes can reach GitLab."""
     env["STUDIO_GLAB_PROJECT"] = deploys_project
+    env["STUDIO_GLAB_TARGET"] = deploys_base  # what glab defaults to: the project's base branch
     env["GITLAB_URL"] = gitlab_url
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
     if fake_root is not None:

@@ -42,6 +42,13 @@ def _str(value) -> str:
     return str(value).lower() if isinstance(value, bool) else str(value)
 
 
+def bind(settings: dict, clusters: list[dict]) -> dict:
+    """Swap the manifest's connection for this environment's, like the foundry watcher does
+    for transformers: the cluster whose `match` equals Brokers supplies the connection."""
+    cluster = next((c for c in clusters if c["match"] == (settings or {}).get("Brokers")), None)
+    return dict(cluster["connection"]) if cluster else dict(settings or {})
+
+
 def client_config(settings: dict, secrets_dir: Path) -> dict:
     """ConnectionSettings -> librdkafka consumer config, as the transformer runtime builds it."""
     cfg: dict[str, str] = {}

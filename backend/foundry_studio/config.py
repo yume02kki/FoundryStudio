@@ -34,6 +34,9 @@ class Settings:
     # Kafka credentials for the live feed, laid out like the transformer runtime's:
     # <secrets_dir>/<SecretRef>/username and /password.
     secrets_dir: Path = Path("/var/run/secrets/foundry")
+    # Where the manifest's sink Brokers really are from this machine, in the watcher's
+    # `clusters:` format: [{match: <manifest Brokers>, connection: {<ConnectionSettings>}}].
+    kafka_clusters: list[dict] = field(default_factory=list)
 
     @property
     def token(self) -> str | None:
@@ -62,4 +65,19 @@ class Settings:
         s.fake_gitlab = env.get("STUDIO_FAKE_GITLAB") or None
         if env.get("FOUNDRY_SECRETS_DIR"):
             s.secrets_dir = Path(env["FOUNDRY_SECRETS_DIR"]).expanduser().resolve()
+        if env.get("STUDIO_KAFKA_CLUSTERS"):
+            s.kafka_clusters = load_clusters(Path(env["STUDIO_KAFKA_CLUSTERS"]).expanduser())
         return s
+
+
+def load_clusters(path: Path) -> list[dict]:
+    """A YAML file with a `clusters:` list (a foundry watcher.yaml works as is)."""
+    import yaml
+
+    data = yaml.safe_load(path.read_text()) or {}
+    clusters = data.get("clusters") if isinstance(data, dict) else data
+    if not isinstance(clusters, list) or not all(
+        isinstance(c, dict) and c.get("match") and isinstance(c.get("connection"), dict) for c in clusters
+    ):
+        raise ValueError(f"{path}: expected clusters: [{{match: ..., connection: {{...}}}}]")
+    return clusters

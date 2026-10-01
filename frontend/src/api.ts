@@ -45,26 +45,26 @@ async function call<T>(path: string, init?: RequestInit & { json?: unknown }): P
 }
 
 export const api = {
-  health: () => call<Health>("/api/health"),
-  transformers: () => call<{ transformers: TransformerInfo[]; status: WatcherStatus }>("/api/transformers"),
-  template: () => call<Graph>("/api/template"),
-  pipelines: () => call<{ pipelines: PipelineListing[] }>("/api/pipelines"),
+  health: () => call<Health>("api/health"),
+  transformers: () => call<{ transformers: TransformerInfo[]; status: WatcherStatus }>("api/transformers"),
+  template: () => call<Graph>("api/template"),
+  pipelines: () => call<{ pipelines: PipelineListing[] }>("api/pipelines"),
   load: (name: string, source?: "draft" | "deployed") =>
-    call<LoadedPipeline>(`/api/pipelines/${encodeURIComponent(name)}${source ? `?source=${source}` : ""}`),
+    call<LoadedPipeline>(`api/pipelines/${encodeURIComponent(name)}${source ? `?source=${source}` : ""}`),
   save: (graph: Graph, layout: Layout) =>
-    call<{ path: string; layout: string }>(`/api/pipelines/${encodeURIComponent(graph.name)}`, {
+    call<{ path: string; layout: string }>(`api/pipelines/${encodeURIComponent(graph.name)}`, {
       method: "PUT",
       json: { graph, layout },
     }),
   validate: (graph: Graph, signal?: AbortSignal) =>
-    call<ValidationResult>("/api/validate", { method: "POST", json: { graph }, signal }),
+    call<ValidationResult>("api/validate", { method: "POST", json: { graph }, signal }),
   checkEdge: (graph: Graph, source: string, target: string) =>
-    call<{ ok: boolean; message: string | null }>("/api/check-edge", {
+    call<{ ok: boolean; message: string | null }>("api/check-edge", {
       method: "POST",
       json: { graph, source, target },
     }),
-  deploy: (graph: Graph) => call<DeployResult>("/api/deploy", { method: "POST", json: { graph } }),
-  latestMr: () => call<{ mr: MergeRequest | null }>("/api/merge-requests/latest"),
+  deploy: (graph: Graph) => call<DeployResult>("api/deploy", { method: "POST", json: { graph } }),
+  latestMr: () => call<{ mr: MergeRequest | null }>("api/merge-requests/latest"),
 };
 
 export type PeekEvent =
@@ -75,7 +75,7 @@ export type PeekEvent =
 
 /** Read-only live feed of a sink topic (POST + streamed Server-Sent Events). Resolves when the stream ends. */
 export async function peek(graph: Graph, node: string, onEvent: (e: PeekEvent) => void, signal: AbortSignal) {
-  const res = await fetch("/api/peek", {
+  const res = await fetch("api/peek", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ graph, node }),
@@ -129,7 +129,7 @@ const EVENT_TYPES = [
 
 /** Server-Sent Events from /api/events. `onHello` fires on every (re)connect so callers can resync. */
 export function subscribe(onEvent: (e: ServerEvent) => void, onHello: () => void, onDown: () => void): () => void {
-  const source = new EventSource("/api/events");
+  const source = new EventSource("api/events");
   source.addEventListener("hello", () => onHello());
   for (const type of EVENT_TYPES) {
     source.addEventListener(type, (msg) => onEvent(JSON.parse((msg as MessageEvent).data) as ServerEvent));
