@@ -95,6 +95,7 @@ All configuration comes from environment variables; the defaults fit the yume02k
 | `GITLAB_WEBHOOK_SECRET` | – | Enables `/api/webhooks/gitlab` |
 | `STUDIO_WORKSPACE` | `./workspace` | Where Save writes drafts |
 | `STUDIO_FAKE_GITLAB` | – | `demo`, or a directory of local repos (tests, e2e) |
+| `STUDIO_KAFKA_CLUSTERS` | – | YAML file mapping the manifest's sink `Brokers` to where they really are, in the watcher's `clusters:` format (a watcher.yaml works); without it Live data connects to the manifest's settings as written |
 | `FOUNDRY_SECRETS_DIR` | `/var/run/secrets/foundry` | Kafka credentials for Live data: `<dir>/<SecretRef>/username` and `/password`, as the transformer runtime reads them |
 | `FOUNDRY_DIR` | `./vendor/foundry` | Use another foundry checkout |
 

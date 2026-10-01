@@ -23,7 +23,7 @@ from .fake_gitlab import FakeGitLab
 from .foundry import Foundry
 from .gitlab import GitLab, HttpGitLab
 from .manifest import SINK, SOURCE, graph_to_manifest
-from .peek import FormatChecker, PeekError, client_config, demo_feed, kafka_feed
+from .peek import FormatChecker, PeekError, bind, client_config, demo_feed, kafka_feed
 from .pipelines import PipelineError, PipelineStore
 from .validation import Validator
 from .watcher import EventBus, Watcher
@@ -116,6 +116,7 @@ def build_services(settings: Settings) -> Services:
     shim_dir = Path(tempfile.mkdtemp(prefix="studio-bin-"))
     gitenv.configure(
         os.environ, gitlab_url=settings.gitlab_url, deploys_project=settings.deploys_project, shim_dir=shim_dir,
+        deploys_base=settings.deploys_base,
         fake_root=fake_root, fake_projects=[*settings.transformer_projects, settings.deploys_project],
     )
     return Services(settings, gitlab, foundry, fake_root)
@@ -249,7 +250,8 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             feed = demo_feed(ontology, topic, checker, stop)
         else:
             try:
-                cfg = client_config(ep["connection"], s.settings.secrets_dir)
+                conn = bind(ep["connection"] or {}, s.settings.kafka_clusters)
+                cfg = client_config(conn, s.settings.secrets_dir)
             except PeekError as e:
                 feed = _single({"type": "status", "state": "error", "message": str(e)})
             else:

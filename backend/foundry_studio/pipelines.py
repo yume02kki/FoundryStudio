@@ -147,7 +147,7 @@ class PipelineStore:
     # -- deploy ------------------------------------------------------------------------- #
 
     def deploy(self, graph: dict, repo_url: str) -> dict:
-        """Runs deploy.deploy(..., push=True, pr=True). Blocking: call it in a thread."""
+        """Runs deploy.deploy(..., open_mr=True). Blocking: call it in a thread."""
         name = check_name(str(graph.get("name") or ""))
         d = self.foundry.deploy
         buf = io.StringIO()
@@ -155,7 +155,7 @@ class PipelineStore:
             manifest = stage(graph, Path(tmp) / name, self.schema_resolver(name))
             try:
                 with contextlib.redirect_stdout(buf):
-                    d.deploy(manifest, repo_url, self.deploys_base, None, True, True)
+                    d.deploy(manifest, repo_url, True)
             except d.ManifestError as e:
                 errors = [self.foundry.locate(m.replace(str(manifest), "manifest.yaml")) for m in e.errors]
                 raise PipelineError(422, f"manifest invalid ({len(errors)} errors)", errors, buf.getvalue())
@@ -165,6 +165,6 @@ class PipelineStore:
         if "already up to date" in out:
             return {"status": "up_to_date", "mrUrl": None, "log": out}
         url = MR_URL_RE.search(out)
-        branch = re.search(r"pushed (\S+) to", out)
+        branch = re.search(r"^pushed (\S+)", out, re.M)
         return {"status": "opened", "mrUrl": url.group(0) if url else None,
                 "branch": branch.group(1) if branch else None, "log": out}
