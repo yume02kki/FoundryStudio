@@ -116,6 +116,7 @@ def build_services(settings: Settings) -> Services:
     shim_dir = Path(tempfile.mkdtemp(prefix="studio-bin-"))
     gitenv.configure(
         os.environ, gitlab_url=settings.gitlab_url, deploys_project=settings.deploys_project, shim_dir=shim_dir,
+        deploys_base=settings.deploys_base,
         fake_root=fake_root, fake_projects=[*settings.transformer_projects, settings.deploys_project],
     )
     return Services(settings, gitlab, foundry, fake_root)
