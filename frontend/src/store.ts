@@ -13,7 +13,6 @@ import {
   type FeedMessage,
   type FeedState,
   type PipelineListing,
-  type SinkId,
   type TransformerInfo,
   type ValidationResult,
   type WatcherStatus,
@@ -83,7 +82,8 @@ interface State {
   toasts: Toast[];
   bottomTab: "project" | "live";
   feedsOn: boolean;
-  feeds: Record<SinkId, FeedState>;
+  liveStage: string | null; // the node whose data Live data shows
+  feeds: Record<string, FeedState>; // by writerKey (see lib/stages.ts)
   versionPickerFor: string | null;
   deployOpen: boolean;
   busy: "save" | "deploy" | null;
@@ -106,8 +106,8 @@ interface State {
   upsertTransformer: (info: TransformerInfo, kind: "added" | "updated") => void;
   removeTransformer: (id: string) => void;
 
-  feedStatus: (sink: SinkId, status: Partial<FeedState>) => void;
-  feedMessage: (sink: SinkId, message: FeedMessage) => void;
+  feedStatus: (key: string, status: Partial<FeedState>) => void;
+  feedMessage: (key: string, message: FeedMessage) => void;
   toast: (t: Omit<Toast, "id">, ttl?: number) => void;
   dismiss: (id: number) => void;
 }
@@ -137,7 +137,8 @@ export const useStudio = create<State>()((set, get) => ({
   toasts: [],
   bottomTab: "project",
   feedsOn: false,
-  feeds: { InputSink: idleFeed(), OutputSink: idleFeed() },
+  liveStage: null,
+  feeds: {},
   versionPickerFor: null,
   deployOpen: false,
   busy: null,
@@ -286,14 +287,14 @@ export const useStudio = create<State>()((set, get) => ({
       return { transformers };
     }),
 
-  feedStatus: (sink, status) =>
-    set((s) => ({ feeds: { ...s.feeds, [sink]: { ...s.feeds[sink], ...status } } })),
+  feedStatus: (key, status) =>
+    set((s) => ({ feeds: { ...s.feeds, [key]: { ...(s.feeds[key] ?? idleFeed()), ...status } } })),
 
-  feedMessage: (sink, message) =>
+  feedMessage: (key, message) =>
     set((s) => {
-      const f = s.feeds[sink];
+      const f = s.feeds[key] ?? idleFeed();
       return {
-        feeds: { ...s.feeds, [sink]: { ...f, messages: [message, ...f.messages].slice(0, FEED_KEEP), count: f.count + 1 } },
+        feeds: { ...s.feeds, [key]: { ...f, messages: [message, ...f.messages].slice(0, FEED_KEEP), count: f.count + 1 } },
       };
     }),
 

@@ -1,32 +1,26 @@
 import {
   BaseEdge,
-  EdgeLabelRenderer,
   getBezierPath,
   useConnection,
   useReactFlow,
   type ConnectionLineComponentProps,
   type EdgeProps,
 } from "@xyflow/react";
-import { checkConnection, edgeTopic, emits, shortReason } from "../lib/rules";
+import { checkConnection, emits, shortReason } from "../lib/rules";
 import { schemaColor } from "../lib/schemaColor";
 import { issuesFor, useStudio, type PEdge, type PNode } from "../store";
 
 export function TopicEdge(props: EdgeProps<PEdge>) {
   const { id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected } = props;
-  const [path, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
+  const [path] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
   const validation = useStudio((s) => s.validation);
   const focus = useStudio((s) => s.focus);
   const nodes = useStudio((s) => s.nodes);
-  const edges = useStudio((s) => s.edges);
-  const name = useStudio((s) => s.meta?.name ?? "");
 
   const sourceNode = nodes.find((n) => n.id === source)?.data.spec;
   const color = schemaColor(emits(sourceNode));
   const errors = issuesFor(validation, undefined, [source, target]);
   const focused = focus?.edges.includes(id);
-  const topic =
-    validation?.topics[id] ??
-    edgeTopic(name, { nodes: nodes.map((n) => n.data.spec), edges: edges.map((e) => ({ source: e.source, target: e.target })) }, source);
   const stroke = errors.length ? "var(--error)" : color;
 
   return (
@@ -37,18 +31,6 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
         markerEnd={`url(#arrow-${errors.length ? "error" : color.slice(1)})`}
         style={{ stroke, strokeWidth: selected || focused ? 3 : 2, opacity: focused || selected ? 1 : 0.85 }}
       />
-      {topic?.internal && (
-        <EdgeLabelRenderer>
-          <div
-            className="edge-label"
-            data-testid={`topic-${id}`}
-            style={{ transform: `translate(-50%, -100%) translate(${labelX}px, ${labelY - 8}px)` }}
-            title="Internal dataset, generated from the graph (read-only)"
-          >
-            {topic.topic}
-          </div>
-        </EdgeLabelRenderer>
-      )}
     </>
   );
 }

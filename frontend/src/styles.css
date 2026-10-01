@@ -1222,3 +1222,270 @@ button.tab:hover:not(.active) {
 .activity-bad {
   color: #ff8a80;
 }
+
+/* pipeline name, edited in place in the top bar */
+.name-input {
+  width: auto;
+  background: transparent;
+  border: 1px solid transparent;
+  font-weight: 600;
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+.name-input:hover {
+  border-color: #555;
+}
+
+.name-input:focus {
+  background: #2a2a2a;
+}
+
+.name-input.invalid {
+  border-color: var(--error);
+}
+
+/* ---------------------------------------------------------------- live data: stages and transform view */
+
+.live {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.live > .feed,
+.live > .transform {
+  flex: 1;
+  min-height: 0;
+}
+
+.stage-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 4px 8px;
+  background: var(--header);
+  border-bottom: 1px solid var(--border);
+}
+
+.stage-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.stage-arrow {
+  color: var(--muted);
+  padding: 0 4px;
+}
+
+.stage {
+  border: 1px solid #222;
+  border-radius: 3px;
+  background: #4a4a4a;
+  color: var(--text);
+  padding: 1px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.stage:hover {
+  background: #555;
+}
+
+.stage.active {
+  background: var(--accent-2);
+  border-color: var(--accent);
+}
+
+.feed-schema {
+  font-size: 11px;
+}
+
+.mini-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.transform {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.transform-head {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 10px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.transform-side {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.transform-side.right {
+  justify-content: flex-end;
+}
+
+.transform-topic {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.transform-mid {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.transform-stats {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.pairs {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pair-line {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 1fr) 70px minmax(0, 1fr) 150px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 2px 10px;
+  border: none;
+  border-bottom: 1px solid #262626;
+  background: none;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  font-size: 12px;
+}
+
+.pair-line:hover {
+  background: #3a3a3a;
+}
+
+.pair.open .pair-line {
+  background: var(--accent-2);
+}
+
+.pair-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.pair-status {
+  text-align: center;
+  font-size: 11px;
+  border-radius: 8px;
+  padding: 0 6px;
+}
+
+.status-transformed {
+  color: #8fd694;
+  font-size: 14px;
+}
+
+.status-dropped {
+  background: #5a2323;
+  color: #ff8a80;
+}
+
+.status-pending {
+  color: var(--muted);
+}
+
+.status-out-only,
+.status-unkeyed {
+  background: #444;
+  color: var(--muted);
+}
+
+.pair-changes {
+  color: #f2c26b;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pair-dropped .pair-line {
+  background: rgba(255, 82, 82, 0.08);
+}
+
+.pair-detail {
+  padding: 6px 10px 10px 78px;
+  background: #222;
+  border-bottom: 1px solid #262626;
+}
+
+.pair-meta {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 4px;
+}
+
+.diff {
+  margin: 0 0 6px;
+  padding-left: 16px;
+  font-size: 12px;
+}
+
+.diff .before {
+  color: #ff8a80;
+}
+
+.diff .after {
+  color: #8fd694;
+}
+
+.pair-pre {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.pair-pre-title {
+  color: var(--muted);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.pair-pre pre {
+  margin: 0;
+  max-height: 160px;
+  overflow: auto;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  background: #1c1c1c;
+  padding: 6px;
+  border-radius: 3px;
+}

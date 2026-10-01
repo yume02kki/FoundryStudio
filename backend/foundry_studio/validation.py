@@ -94,6 +94,25 @@ class Validator:
                 out[f"{u}->{v}"] = {"topic": ep, "internal": True}
         return out
 
+    def endpoint(self, graph: dict, node: str) -> dict:
+        """The topic a node writes (for a sink: the sink's own topic), and how to connect to it.
+
+        Uses deploy.endpoint_id, so a transformer's output is exactly the topic deploy.py
+        generates: <Pipeline>.<Transformer>.out, or OutputSink's topic when it feeds it.
+        """
+        nodes = {n["id"]: n for n in graph.get("nodes", [])}
+        if node not in nodes:
+            raise ValueError(f"unknown node {node!r}")
+        edges = [(e["source"], e["target"]) for e in graph.get("edges", [])]
+        ep = node if node in (SOURCE, SINK) else self.deploy.endpoint_id(self._pipeline(graph, edges), node)
+        if ep in (SOURCE, SINK):
+            sink = nodes.get(ep, {}).get("sink") or {}
+            return {"endpoint": ep, "topic": str(sink.get("Topic") or ""), "schema": sink.get("Ontology"),
+                    "connection": sink.get("ConnectionSettings") or {}, "internal": False}
+        internal = ((graph.get("defaults") or {}).get("InternalDatasets") or {})
+        return {"endpoint": ep, "topic": ep, "schema": (nodes[node].get("transformer") or {}).get("OUT"),
+                "connection": internal.get("ConnectionSettings") or {}, "internal": True}
+
     def check_edge(self, graph: dict, source: str, target: str) -> dict:
         """Would adding source -> target be accepted? Uses deploy.py's own graph checks."""
         existing = [(e["source"], e["target"]) for e in graph.get("edges", [])]

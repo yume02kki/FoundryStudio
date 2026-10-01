@@ -3,10 +3,8 @@ import { memo } from "react";
 import { checkConnection, emits, expects } from "../lib/rules";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, updateFor, versionFor } from "../lib/versions";
-import { feedHealth } from "../lib/feedHealth";
 import { issuesFor, useStudio, type PNode } from "../store";
-import type { SinkId } from "../types";
-import { useNow } from "./LiveData";
+import { NodeActivity } from "./LiveData";
 
 type PortState = "idle" | "compatible" | "incompatible" | "origin";
 
@@ -41,29 +39,6 @@ function Port({ nodeId, port, schema }: { nodeId: string; port: "in" | "out"; sc
         {port === "out" ? " ▸" : ""}
       </span>
     </div>
-  );
-}
-
-/** "Flowing · 12/min" on Source/Output while Live data is on; click opens the feed. */
-function SinkActivity({ sink }: { sink: SinkId }) {
-  const feed = useStudio((s) => s.feeds[sink]);
-  const now = useNow();
-  if (feed.state === "idle") return null;
-  const h = feedHealth(feed, now);
-  return (
-    <button
-      className={`activity tone-${h.tone} nodrag`}
-      data-testid={`activity-${sink}`}
-      title={`${h.label} — ${h.detail}`}
-      onClick={(e) => {
-        e.stopPropagation();
-        useStudio.setState({ bottomTab: "live" });
-      }}
-    >
-      <span className="dot" />
-      {h.label}
-      {h.mismatches > 0 && <span className="activity-bad"> · {h.mismatches} bad</span>}
-    </button>
   );
 }
 
@@ -119,7 +94,7 @@ function PipelineNodeView({ id, data, selected }: NodeProps<PNode>) {
       </div>
       <div className="pnode-title">{id}</div>
       <div className="pnode-sub">{subtitle || " "}</div>
-      {(spec.kind === "source" || spec.kind === "output") && <SinkActivity sink={id as SinkId} />}
+      <NodeActivity node={id} />
       <div className="pnode-ports">
         {spec.kind !== "source" ? <Port nodeId={id} port="in" schema={expects(spec)} /> : <span />}
         {spec.kind !== "output" ? <Port nodeId={id} port="out" schema={emits(spec)} /> : <span />}

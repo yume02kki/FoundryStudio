@@ -180,6 +180,9 @@ export interface FeedMessage {
 
 export interface FeedState {
   state: "idle" | "connecting" | "live" | "error";
+  topic?: string;
+  schema?: string | null;
+  internal?: boolean;
   message?: string;
   demo?: boolean;
   partitions?: number;

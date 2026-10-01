@@ -68,6 +68,7 @@ export const api = {
 };
 
 export type PeekEvent =
+  | { type: "endpoint"; endpoint: string; topic: string; schema: string | null; internal: boolean }
   | { type: "status"; state: "connecting" | "live" | "error"; message?: string; demo?: boolean; partitions?: number }
   | ({ type: "message" } & Omit<FeedMessage, "receivedAt">)
   | { type: "ping" };

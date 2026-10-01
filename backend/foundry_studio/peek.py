@@ -261,38 +261,80 @@ async def kafka_feed(cfg: dict, topic: str, checker: FormatChecker, stop: asynci
 
 # --------------------------------------------------------------------------- #
 # Demo mode: there's no Kafka, so make up plausible traffic (flagged as demo).
+#
+# Every topic carries the same record stream: record n has the same guid (also the
+# Kafka key, as foundry-schemas' Schema::key does) on every topic, rendered in that
+# topic's schema and a little later the further downstream it is. Every 7th record's
+# data isn't UTF-8 text, so a Packets topic doesn't carry it, the way Base64Decoder
+# drops it. That lets the UI pair a transformer's input and output records.
 # --------------------------------------------------------------------------- #
 
-def _sample(schema: str | None, n: int, rnd: random.Random) -> bytes:
-    guid = uuid.UUID(int=rnd.getrandbits(128), version=4)
-    text = rnd.choice(["Hello, world!", "ping", "temperature=21.5", "door opened", "heartbeat"])
-    encoded = base64.b64encode(text.encode()).decode()
-    sent = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-    host, target = f"10.0.4.{rnd.randint(2, 250)}", f"2001:db8::{rnd.randint(1, 255):x}"
+DEMO_EPOCH = 1_790_000_000.0
+DEMO_INTERVAL = 1.5
+DEMO_STAGE_DELAY = {"XmlPackets": 0.0, "EncodedPackets": 0.25, "Packets": 0.5}
+_TEXTS = ["Hello, world!", "ping", "temperature=21.5", "door opened", "heartbeat"]
+
+
+def demo_record(n: int) -> dict:
+    rnd = random.Random(n)
+    data = bytes(rnd.getrandbits(8) | 0x80 for _ in range(6)) if n % 7 == 3 else rnd.choice(_TEXTS).encode()
+    produced = DEMO_EPOCH + n * DEMO_INTERVAL
+    return {
+        "guid": str(uuid.UUID(int=rnd.getrandbits(128), version=4)),
+        "data": data,
+        "time_sent": datetime.fromtimestamp(produced, timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        "host_ip": f"10.0.4.{rnd.randint(2, 250)}",
+        "target_ip": f"2001:db8::{rnd.randint(1, 255):x}",
+    }
+
+
+def demo_value(schema: str | None, rec: dict) -> bytes | None:
+    """Record n as it appears on a topic of this schema, or None if the topic doesn't carry it."""
+    encoded = base64.b64encode(rec["data"]).decode()
     if schema == "XmlPackets":
-        return (f"<packet><guid>{guid}</guid><data>{encoded}</data><time_sent>{sent}</time_sent>"
-                f"<host_ip>{host}</host_ip><target_ip>{target}</target_ip></packet>").encode()
-    data = encoded if schema == "EncodedPackets" else text
-    return json.dumps({"guid": str(guid), "data": data, "time_sent": sent, "host_ip": host,
-                       "target_ip": target}, separators=(",", ":")).encode()
+        return (f"<packet><guid>{rec['guid']}</guid><data>{encoded}</data><time_sent>{rec['time_sent']}</time_sent>"
+                f"<host_ip>{rec['host_ip']}</host_ip><target_ip>{rec['target_ip']}</target_ip></packet>").encode()
+    if schema == "Packets":
+        try:
+            data = rec["data"].decode("utf-8")
+        except UnicodeDecodeError:
+            return None  # dropped by the decoder
+    else:
+        data = encoded
+    return json.dumps({"guid": rec["guid"], "data": data, "time_sent": rec["time_sent"], "host_ip": rec["host_ip"],
+                       "target_ip": rec["target_ip"]}, separators=(",", ":")).encode()
 
 
 async def demo_feed(schema: str | None, topic: str, checker: FormatChecker, stop: asyncio.Event,
-                    history: int = 5, interval: float = 1.5) -> AsyncIterator[dict]:
-    rnd = random.Random(topic)
+                    history: int = 6, interval: float = DEMO_INTERVAL) -> AsyncIterator[dict]:
     yield {"type": "status", "state": "live", "partitions": 3, "demo": True,
            "message": "demo mode: generated sample messages, not a real topic"}
-    offset = 1000
-    now = int(time.time() * 1000)
-    for i in range(history):
-        offset += 1
-        value = _sample(schema, i, rnd)
-        yield message_event(offset % 3, offset, now - (history - i) * 1500, None, value, checker)
+    delay = DEMO_STAGE_DELAY.get(schema or "", 0.0)
+    scale = interval / DEMO_INTERVAL  # tests run the clock faster
+
+    def due(n: int) -> float:
+        return DEMO_EPOCH + (n * DEMO_INTERVAL + delay) * scale
+
+    def emit(n: int) -> dict | None:
+        rec = demo_record(n)
+        value = demo_value(schema, rec)
+        if value is None:
+            return None
+        return message_event(n % 3, n // 3, int(due(n) * 1000), rec["guid"].encode(), value, checker)
+
+    now = time.time()
+    n = int((now - DEMO_EPOCH) / (DEMO_INTERVAL * scale))
+    while due(n) > now:
+        n -= 1
+    for i in range(n - history + 1, n + 1):
+        if (e := emit(i)) is not None:
+            yield e
     while not stop.is_set():
+        n += 1
         try:
-            await asyncio.wait_for(stop.wait(), timeout=interval * rnd.uniform(0.5, 1.5))
+            await asyncio.wait_for(stop.wait(), timeout=max(0.0, due(n) - time.time()))
             break
         except asyncio.TimeoutError:
             pass
-        offset += 1
-        yield message_event(offset % 3, offset, int(time.time() * 1000), None, _sample(schema, offset, rnd), checker)
+        if (e := emit(n)) is not None:
+            yield e

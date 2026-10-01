@@ -1,80 +1,80 @@
 import { useEffect, useState } from "react";
 import { ApiError, peek } from "../api";
 import { ago, feedHealth, messageTime } from "../lib/feedHealth";
+import { schemaColor } from "../lib/schemaColor";
+import { diffRecords, pairRecords, stageFeeds, stages, writerKey, type Pair } from "../lib/stages";
 import { useStudio } from "../store";
-import type { FeedMessage, SinkId } from "../types";
+import { SINK, SOURCE, type FeedMessage, type FeedState } from "../types";
 
-const SINKS: SinkId[] = ["InputSink", "OutputSink"];
 const RETRY_MS = 3000;
 
-/** What a feed depends on; the feed restarts (debounced) when it changes. */
-function useSinkKey(sink: SinkId): string {
-  return useStudio((s) => {
-    const node = s.nodes.find((n) => n.id === sink)?.data.spec.sink;
-    if (!node?.Topic) return "";
-    const schema = node.Ontology ? s.meta?.schemas[node.Ontology] : undefined;
-    return JSON.stringify([s.meta?.name, node.Topic, node.Ontology, schema, node.ConnectionSettings ?? {}]);
-  });
+// --------------------------------------------------------------------------- feeds
+
+/** Open one feed (the topic `key` writes) until aborted; reconnects after errors. */
+function runFeed(key: string, signal: AbortSignal) {
+  let retry: ReturnType<typeof setTimeout> | undefined;
+  const run = async () => {
+    const s = useStudio.getState();
+    s.feedStatus(key, { state: "connecting", message: undefined });
+    try {
+      await peek(
+        s.graph(),
+        key,
+        (e) => {
+          const st = useStudio.getState();
+          if (e.type === "endpoint") st.feedStatus(key, { topic: e.topic, schema: e.schema, internal: e.internal });
+          else if (e.type === "status") st.feedStatus(key, { state: e.state, message: e.message, demo: e.demo, partitions: e.partitions });
+          else if (e.type === "message") {
+            const { type: _type, ...m } = e;
+            st.feedMessage(key, { ...m, receivedAt: Date.now() });
+          }
+        },
+        signal,
+      );
+      if (!signal.aborted) useStudio.getState().feedStatus(key, { state: "error", message: "feed ended; reconnecting…" });
+    } catch (err) {
+      if (signal.aborted) return;
+      const message = err instanceof ApiError ? err.message : `connection lost (${(err as Error).message})`;
+      useStudio.getState().feedStatus(key, { state: "error", message });
+      if (err instanceof ApiError && err.status === 400) return; // a config problem; retrying won't help
+    }
+    if (!signal.aborted) retry = setTimeout(run, RETRY_MS);
+  };
+  void run();
+  signal.addEventListener("abort", () => clearTimeout(retry));
 }
 
-function useFeed(sink: SinkId, on: boolean) {
-  const key = useSinkKey(sink);
-  useEffect(() => {
-    const { feedStatus } = useStudio.getState();
-    if (!on) {
-      feedStatus(sink, { state: "idle", message: undefined, messages: [], count: 0 });
-      return;
-    }
-    if (!key) {
-      feedStatus(sink, { state: "error", message: `${sink} has no Topic yet`, messages: [], count: 0 });
-      return;
-    }
-    const ctrl = new AbortController();
-    let retry: ReturnType<typeof setTimeout> | undefined;
-
-    const run = async () => {
-      const s = useStudio.getState();
-      s.feedStatus(sink, { state: "connecting", message: undefined });
-      try {
-        await peek(
-          s.graph(),
-          sink,
-          (e) => {
-            const st = useStudio.getState();
-            if (e.type === "status") st.feedStatus(sink, { state: e.state, message: e.message, demo: e.demo, partitions: e.partitions });
-            else if (e.type === "message") {
-              const { type: _type, ...m } = e;
-              st.feedMessage(sink, { ...m, receivedAt: Date.now() });
-            }
-          },
-          ctrl.signal,
-        );
-        if (!ctrl.signal.aborted) useStudio.getState().feedStatus(sink, { state: "error", message: "feed ended; reconnecting…" });
-      } catch (err) {
-        if (ctrl.signal.aborted) return;
-        const message = err instanceof ApiError ? err.message : `connection lost (${(err as Error).message})`;
-        useStudio.getState().feedStatus(sink, { state: "error", message });
-        if (err instanceof ApiError && err.status === 400) return; // a config problem; retrying won't help
-      }
-      if (!ctrl.signal.aborted) retry = setTimeout(run, RETRY_MS);
-    };
-
-    // Debounce: typing a topic shouldn't open a connection per keystroke.
-    feedStatus(sink, { messages: [], count: 0 });
-    const start = setTimeout(run, 600);
-    return () => {
-      clearTimeout(start);
-      clearTimeout(retry);
-      ctrl.abort();
-    };
-  }, [sink, key, on]);
-}
-
-/** Runs the InputSink and OutputSink feeds while Live data is on. Mounted once, in App. */
+/**
+ * Runs the feeds the selected Live data stage needs (its input topics and its output
+ * topic) while Live data is on. Mounted once, in App. Graph edits restart the feeds
+ * (debounced), since a topic or connection setting may have changed.
+ */
 export function useLiveFeeds() {
   const on = useStudio((s) => s.feedsOn && s.meta !== null);
-  useFeed("InputSink", on);
-  useFeed("OutputSink", on);
+  const stage = useStudio((s) => s.liveStage);
+  const revision = useStudio((s) => s.revision);
+  useEffect(() => {
+    if (!on) {
+      useStudio.setState({ feeds: {} });
+      return;
+    }
+    const graph = useStudio.getState().graph();
+    const all = stages(graph);
+    if (!stage || !all.includes(stage)) {
+      // Default to the first transformer: the most useful before/after view.
+      useStudio.setState({ liveStage: all.length > 2 ? all[1] : SOURCE });
+      return;
+    }
+    const { inputs, output } = stageFeeds(graph, stage);
+    const keys = [...new Set([...inputs, output])];
+    useStudio.setState({ feeds: Object.fromEntries(keys.map((k) => [k, { state: "connecting", messages: [], count: 0 } as FeedState])) });
+    const ctrl = new AbortController();
+    const start = setTimeout(() => keys.forEach((k) => runFeed(k, ctrl.signal)), 500);
+    return () => {
+      clearTimeout(start);
+      ctrl.abort();
+    };
+  }, [on, stage, revision]);
 }
 
 export function useNow(intervalMs = 2000) {
@@ -86,26 +86,77 @@ export function useNow(intervalMs = 2000) {
   return now;
 }
 
-/** Small In/Out status dots on the "Live data" tab while feeds run. */
+// --------------------------------------------------------------------------- small pieces
+
+function StatusPill({ feed, now, testId }: { feed: FeedState | undefined; now: number; testId?: string }) {
+  if (!feed) return null;
+  const h = feedHealth(feed, now);
+  return (
+    <span className={`status status-${h.tone}`} data-testid={testId} title={h.detail}>
+      <span className="dot" />
+      {h.label}
+    </span>
+  );
+}
+
+function TopicLabel({ feed, fallback }: { feed: FeedState | undefined; fallback: string }) {
+  return (
+    <span className="feed-topic mono" title={feed?.internal ? "Internal topic, generated by deploy.py" : "Topic"}>
+      {feed?.topic || fallback}
+      {feed?.schema && (
+        <span className="feed-schema" style={{ color: schemaColor(feed.schema) }}>
+          {" "}
+          {feed.schema}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/** Status dots on the "Live data" tab while feeds run. */
 export function LiveTabBadges() {
   const feeds = useStudio((s) => s.feeds);
   const now = useNow();
   return (
     <>
-      {SINKS.filter((s) => feeds[s].state !== "idle").map((s) => {
-        const h = feedHealth(feeds[s], now);
-        return (
-          <span key={s} className={`mini-status tone-${h.tone}`} title={`${s}: ${h.label} — ${h.detail}`}>
-            <span className="dot" />
-            {s === "InputSink" ? "In" : "Out"}
-          </span>
-        );
-      })}
+      {Object.entries(feeds)
+        .filter(([, f]) => f.state !== "idle")
+        .map(([k, f]) => {
+          const h = feedHealth(f, now);
+          return <span key={k} className={`mini-dot tone-${h.tone}`} title={`${f.topic ?? k}: ${h.label}`} />;
+        })}
     </>
   );
 }
 
-function pretty(m: FeedMessage): string {
+/** Activity line on a canvas node: the health of the topic it writes, while that feed runs. */
+export function NodeActivity({ node }: { node: string }) {
+  const key = useStudio((s) =>
+    writerKey({ nodes: s.nodes.map((n) => n.data.spec), edges: s.edges.map((e) => ({ source: e.source, target: e.target })) }, node),
+  );
+  const feed = useStudio((s) => s.feeds[key]);
+  const now = useNow();
+  if (!feed || feed.state === "idle") return null;
+  const h = feedHealth(feed, now);
+  return (
+    <button
+      className={`activity tone-${h.tone} nodrag`}
+      data-testid={`activity-${node}`}
+      title={`${feed.topic ?? key}: ${h.label} — ${h.detail}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        useStudio.setState({ bottomTab: "live", liveStage: node });
+      }}
+    >
+      <span className="dot" />
+      {h.label}
+      {h.mismatches > 0 && <span className="activity-bad"> · {h.mismatches} bad</span>}
+    </button>
+  );
+}
+
+function pretty(m: FeedMessage | undefined): string {
+  if (!m) return "";
   if (m.value === null) return "(empty)";
   if (m.encoding === "base64") return `(binary, base64) ${m.value}`;
   try {
@@ -114,6 +165,12 @@ function pretty(m: FeedMessage): string {
     return m.value.replace(/></g, ">\n<");
   }
 }
+
+function clip(s: string, n = 48) {
+  return s.length > n ? `${s.slice(0, n)}…` : s;
+}
+
+// --------------------------------------------------------------------------- single topic
 
 function MessageRow({ m, now }: { m: FeedMessage; now: number }) {
   const [open, setOpen] = useState(false);
@@ -124,9 +181,7 @@ function MessageRow({ m, now }: { m: FeedMessage; now: number }) {
         <span className={`msg-check ${m.check.ok === false ? "bad" : m.check.ok ? "good" : ""}`}>
           {m.check.ok === false ? "✕" : m.check.ok ? "✓" : "·"}
         </span>
-        <span className="msg-time" title={new Date(t).toISOString()}>
-          {ago(now - t)}
-        </span>
+        <span className="msg-time">{ago(now - t)}</span>
         <span className="msg-pos">
           p{m.partition}@{m.offset}
         </span>
@@ -138,7 +193,6 @@ function MessageRow({ m, now }: { m: FeedMessage; now: number }) {
           <div className="msg-meta">
             {new Date(t).toLocaleString()} · partition {m.partition} · offset {m.offset} · {m.size} bytes
             {m.key ? ` · key ${m.key}` : ""}
-            {m.truncated ? " · preview truncated" : ""}
           </div>
           <pre>{pretty(m)}</pre>
         </div>
@@ -147,60 +201,194 @@ function MessageRow({ m, now }: { m: FeedMessage; now: number }) {
   );
 }
 
-function FeedColumn({ sink, now }: { sink: SinkId; now: number }) {
-  const feed = useStudio((s) => s.feeds[sink]);
-  const node = useStudio((s) => s.nodes.find((n) => n.id === sink)?.data.spec.sink);
-  const h = feedHealth(feed, now);
+function TopicView({ stage, now }: { stage: string; now: number }) {
+  const feed = useStudio((s) => s.feeds[stage]);
+  const h = feed ? feedHealth(feed, now) : null;
   return (
-    <section className="feed" data-testid={`feed-${sink}`}>
+    <section className="feed" data-testid={`feed-${stage}`}>
       <header className="feed-head">
         <div className="feed-title">
-          <span className="feed-kind">{sink === "InputSink" ? "Source" : "Output"}</span>
-          <span className="feed-topic mono" title="Topic">
-            {node?.Topic || "no topic"}
-          </span>
-          {node?.Ontology && <span className="tag tag-muted">{node.Ontology}</span>}
-          {feed.demo && (
-            <span className="tag tag-warning" title="Demo mode: generated sample messages">
-              demo data
-            </span>
-          )}
+          <span className="feed-kind">{stage === SOURCE ? "Source" : "Output"}</span>
+          <TopicLabel feed={feed} fallback="" />
+          {feed?.demo && <span className="tag tag-warning">demo data</span>}
         </div>
         <div className="feed-status">
-          <span className={`status status-${h.tone}`} data-testid={`feed-status-${sink}`}>
-            <span className="dot" />
-            {h.label}
-          </span>
-          {h.mismatches > 0 && (
-            <span className="tag tag-danger" title="Messages that don't match the Ontology schema">
-              {h.mismatches} don't match {node?.Ontology}
-            </span>
-          )}
-          <span className="feed-detail" title={h.detail}>
-            {h.detail}
-          </span>
+          <StatusPill feed={feed} now={now} testId={`feed-status-${stage}`} />
+          {h && h.mismatches > 0 && <span className="tag tag-danger">{h.mismatches} don't match {feed?.schema}</span>}
+          <span className="feed-detail">{h?.detail}</span>
         </div>
       </header>
       <ul className="msgs">
-        {feed.messages.map((m) => (
-          <MessageRow key={`${m.partition}:${m.offset}`} m={m} now={now} />
-        ))}
-        {feed.messages.length === 0 && feed.state === "live" && <li className="empty">Waiting for messages…</li>}
+        {feed?.messages.map((m) => <MessageRow key={`${m.partition}:${m.offset}`} m={m} now={now} />)}
+        {feed?.state === "live" && feed.messages.length === 0 && <li className="empty">Waiting for messages…</li>}
       </ul>
     </section>
   );
 }
 
+// --------------------------------------------------------------------------- transformer: input vs output
+
+const STATUS_LABEL: Record<Pair["status"], string> = {
+  transformed: "→",
+  dropped: "dropped",
+  pending: "…",
+  "out-only": "out only",
+  unkeyed: "no key",
+};
+
+function PairRow({ p, now }: { p: Pair; now: number }) {
+  const [open, setOpen] = useState(false);
+  const diff = p.input && p.output ? diffRecords(p.input.value, p.output.value) : null;
+  const changes = diff
+    ? [...(diff.format ? [`${diff.format[0]}→${diff.format[1]}`] : []), ...diff.changed.map((c) => c.field), ...diff.added.map((a) => `+${a}`), ...diff.removed.map((r) => `−${r}`)]
+    : [];
+  return (
+    <li className={`pair pair-${p.status}${open ? " open" : ""}`}>
+      <button className="pair-line" onClick={() => setOpen(!open)}>
+        <span className="msg-time">{ago(now - p.at)}</span>
+        <span className="pair-value">{p.input ? clip(p.input.value ?? "(empty)", 200) : <i className="muted">not in view</i>}</span>
+        <span className={`pair-status status-${p.status}`} title={statusHelp(p.status)}>
+          {STATUS_LABEL[p.status]}
+        </span>
+        <span className="pair-value">
+          {p.output ? clip(p.output.value ?? "(empty)", 200) : <i className="muted">{p.status === "dropped" ? "no output" : "…"}</i>}
+        </span>
+        <span className="pair-changes">{changes.length ? changes.join(", ") : p.status === "transformed" ? "unchanged" : ""}</span>
+      </button>
+      {open && (
+        <div className="pair-detail">
+          <div className="pair-meta">
+            record <span className="mono">{p.id}</span> · {statusHelp(p.status)}
+          </div>
+          {diff && (
+            <ul className="diff">
+              {diff.format && (
+                <li>
+                  <b>format</b> {diff.format[0]} → {diff.format[1]}
+                </li>
+              )}
+              {diff.changed.map((c) => (
+                <li key={c.field}>
+                  <b>{c.field}</b> <span className="before mono">{clip(c.before)}</span> →{" "}
+                  <span className="after mono">{clip(c.after)}</span>
+                </li>
+              ))}
+              {diff.added.map((a) => (
+                <li key={a}>
+                  <b>{a}</b> added
+                </li>
+              ))}
+              {diff.removed.map((r) => (
+                <li key={r}>
+                  <b>{r}</b> removed
+                </li>
+              ))}
+              {diff.unchanged.length > 0 && <li className="muted">unchanged: {diff.unchanged.join(", ")}</li>}
+            </ul>
+          )}
+          <div className="pair-pre">
+            <div>
+              <div className="pair-pre-title">Input {p.input && <CheckMark m={p.input} />}</div>
+              <pre>{pretty(p.input)}</pre>
+            </div>
+            <div>
+              <div className="pair-pre-title">Output {p.output && <CheckMark m={p.output} />}</div>
+              <pre>{pretty(p.output)}</pre>
+            </div>
+          </div>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function CheckMark({ m }: { m: FeedMessage }) {
+  return (
+    <span className={`msg-check ${m.check.ok === false ? "bad" : m.check.ok ? "good" : ""}`} title={m.check.detail}>
+      {m.check.ok === false ? "✕" : m.check.ok ? "✓" : ""} {m.check.detail}
+    </span>
+  );
+}
+
+function statusHelp(s: Pair["status"]): string {
+  return {
+    transformed: "the transformer produced an output for this record",
+    dropped: "no output for this record after 5 s: the transformer dropped it (or it's stuck)",
+    pending: "waiting for the transformer's output",
+    "out-only": "output whose input record is older than the input window",
+    unkeyed: "no Kafka key or guid to match input and output",
+  }[s];
+}
+
+function TransformView({ stage, now }: { stage: string; now: number }) {
+  const graph = useStudio((s) => s.graph);
+  const feeds = useStudio((s) => s.feeds);
+  const { inputs, output } = stageFeeds(graph(), stage);
+  const inFeeds = inputs.map((k) => feeds[k]).filter(Boolean) as FeedState[];
+  const outFeed = feeds[output];
+  const inMsgs = inFeeds.flatMap((f) => f.messages);
+  const pairs = pairRecords(inMsgs, outFeed?.messages ?? [], now).slice(0, 120);
+  const count = (s: Pair["status"]) => pairs.filter((p) => p.status === s).length;
+  const rate = (f: FeedState | undefined) => (f ? feedHealth(f, now).perMinute : 0);
+  const inRate = inFeeds.reduce((n, f) => n + rate(f), 0);
+  const demo = inFeeds.some((f) => f.demo) || outFeed?.demo;
+
+  return (
+    <section className="transform" data-testid={`transform-${stage}`}>
+      <header className="transform-head">
+        <div className="transform-side">
+          <span className="feed-kind">In</span>
+          {inputs.map((k) => (
+            <span key={k} className="transform-topic">
+              <TopicLabel feed={feeds[k]} fallback={k} /> <StatusPill feed={feeds[k]} now={now} />
+            </span>
+          ))}
+        </div>
+        <div className="transform-mid">
+          <b>{stage}</b>
+          <span className="transform-stats" data-testid={`transform-stats-${stage}`}>
+            {inRate}/min in · {rate(outFeed)}/min out · {count("transformed")} transformed · {count("dropped")} dropped
+          </span>
+          {demo && <span className="tag tag-warning">demo data</span>}
+        </div>
+        <div className="transform-side right">
+          <span className="feed-kind">Out</span>
+          <span className="transform-topic">
+            <TopicLabel feed={outFeed} fallback={output} /> <StatusPill feed={outFeed} now={now} />
+          </span>
+        </div>
+      </header>
+      <ul className="pairs">
+        {pairs.map((p) => (
+          <PairRow key={p.id} p={p} now={now} />
+        ))}
+        {pairs.length === 0 && <li className="empty">Waiting for records…</li>}
+      </ul>
+    </section>
+  );
+}
+
+// --------------------------------------------------------------------------- the tab
+
 export function LiveData() {
   const on = useStudio((s) => s.feedsOn);
+  const stage = useStudio((s) => s.liveStage);
+  const order = useStudio((s) => stages({ nodes: s.nodes.map((n) => n.data.spec), edges: s.edges.map((e) => ({ source: e.source, target: e.target })) }).join("|"));
+  const selected = useStudio((s) => s.nodes.find((n) => n.selected)?.id);
   const now = useNow();
+
+  // Selecting a node on the canvas shows its data.
+  useEffect(() => {
+    if (on && selected) useStudio.setState({ liveStage: selected });
+  }, [on, selected]);
+
   if (!on) {
     return (
       <div className="live-off-note">
         <p>
-          See whether data is reaching the <b>Source</b> topic and leaving through the <b>Output</b> topic. Studio reads
-          the latest messages and follows new ones, read-only: it never joins the pipeline's consumer group and never
-          commits offsets.
+          See the data at each step: what reaches the Source topic, what each transformer turns it into (its input
+          records next to its output records), and what leaves through the Output topic. Read-only: Studio never joins
+          the pipeline's consumer groups and never commits offsets.
         </p>
         <button className="btn btn-primary" onClick={() => useStudio.setState({ feedsOn: true })} data-testid="feeds-start">
           Start live data
@@ -208,11 +396,28 @@ export function LiveData() {
       </div>
     );
   }
+  const list = order.split("|");
   return (
-    <div className="feeds">
-      {SINKS.map((s) => (
-        <FeedColumn key={s} sink={s} now={now} />
-      ))}
+    <div className="live">
+      <nav className="stage-strip" aria-label="Pipeline stage">
+        {list.map((s, i) => (
+          <span key={s} className="stage-step">
+            {i > 0 && <span className="stage-arrow">→</span>}
+            <button
+              className={`stage${s === stage ? " active" : ""}`}
+              onClick={() => useStudio.setState({ liveStage: s })}
+              data-testid={`stage-${s}`}
+            >
+              {s === SOURCE ? "Source" : s === SINK ? "Output" : s}
+            </button>
+          </span>
+        ))}
+      </nav>
+      {stage === SOURCE || stage === SINK ? (
+        <TopicView stage={stage} now={now} />
+      ) : stage ? (
+        <TransformView stage={stage} now={now} />
+      ) : null}
     </div>
   );
 }

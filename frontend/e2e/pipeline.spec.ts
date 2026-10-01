@@ -33,9 +33,9 @@ test("AC1: loading SWpipeline draws InputSink -> XmlToJson -> Base64Decoder -> O
   for (const id of ["InputSink->XmlToJson", "XmlToJson->Base64Decoder", "Base64Decoder->OutputSink"]) {
     await expect(page.getByTestId(`rf__edge-${id}`)).toHaveCount(1);
   }
-  // Only the transformer-to-transformer edge carries a generated (internal) topic label.
-  await expect(page.getByTestId("topic-XmlToJson->Base64Decoder")).toHaveText("SWpipeline.XmlToJson.out");
-  await expect(page.locator(".edge-label")).toHaveCount(1);
+  // No topic labels on edges, and no pipeline settings panel.
+  await expect(page.locator(".edge-label")).toHaveCount(0);
+  await expect(page.getByTestId("inspector")).toContainText("Select a node or an edge");
 
   await expect(page.getByTestId("validation-status")).toContainText("valid");
 });

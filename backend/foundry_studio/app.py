@@ -227,26 +227,29 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
 
     @app.post("/api/peek")
     async def peek(body: PeekBody, request: Request):
-        """Server-Sent Events: a read-only live feed of a sink topic (see peek.py)."""
+        """Server-Sent Events: a read-only live feed of the topic a node writes (see peek.py).
+
+        node is InputSink / OutputSink (the sink's topic) or a transformer (its output topic:
+        an internal dataset, or OutputSink's topic when it feeds it)."""
         s = svc(request)
-        if body.node not in (SOURCE, SINK):
-            raise HTTPException(400, "node must be InputSink or OutputSink")
-        node = next((n for n in body.graph.get("nodes", []) if n.get("id") == body.node), None)
-        sink = (node or {}).get("sink") or {}
-        topic = str(sink.get("Topic") or "")
+        try:
+            ep = s.validator.endpoint(body.graph, body.node)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        topic, ontology = ep["topic"], ep["schema"]
         if not topic:
             raise HTTPException(400, f"{body.node} has no Topic")
-        ontology = sink.get("Ontology")
         schema_file = (body.graph.get("schemas") or {}).get(ontology) if ontology else None
         schema_bytes = s.pipelines.schema_resolver(body.graph.get("name"))(schema_file) if schema_file else None
         checker = FormatChecker(ontology, schema_file, schema_bytes)
+        info = {"endpoint": ep["endpoint"], "topic": topic, "schema": ontology, "internal": ep["internal"]}
 
         stop = asyncio.Event()
         if s.fake_root:
             feed = demo_feed(ontology, topic, checker, stop)
         else:
             try:
-                cfg = client_config(sink.get("ConnectionSettings") or {}, s.settings.secrets_dir)
+                cfg = client_config(ep["connection"], s.settings.secrets_dir)
             except PeekError as e:
                 feed = _single({"type": "status", "state": "error", "message": str(e)})
             else:
@@ -258,6 +261,7 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
                 return
             async with s.peeks:
                 try:
+                    yield _sse({"type": "endpoint", **info})
                     async for event in _until_disconnected(feed, request, stop):
                         yield _sse(event)
                 finally:

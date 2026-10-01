@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { emits } from "../lib/rules";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, versionFor } from "../lib/versions";
-import { issuesFor, NAME_RE, useStudio, type Meta } from "../store";
-import { SINK, SOURCE, type ConnectionSettings, type GraphNode, type InternalDatasets, type Issue } from "../types";
+import { issuesFor, NAME_RE, useStudio } from "../store";
+import { SINK, SOURCE, type ConnectionSettings, type GraphNode, type Issue } from "../types";
 
 // Keys the transformer runtime understands (deploy.py's CONNECTION_KEYS). Keys with a
 // "." go to librdkafka verbatim. There is deliberately no password field: credentials
@@ -39,16 +40,6 @@ function TextInput({
       onChange={(e) => onChange(e.target.value)}
       data-testid={testId}
       spellCheck={false}
-    />
-  );
-}
-
-function NumberInput({ value, onChange }: { value: number | undefined; onChange: (v: number | undefined) => void }) {
-  return (
-    <input
-      type="number"
-      value={value ?? ""}
-      onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
     />
   );
 }
@@ -293,7 +284,8 @@ function TransformerInspector({ node }: { node: GraphNode }) {
 function EdgeInspector({ id }: { id: string }) {
   const validation = useStudio((s) => s.validation);
   const [source, target] = id.split("->");
-  const topic = validation?.topics[id];
+  const nodes = useStudio((s) => s.nodes);
+  const schema = emits(nodes.find((n) => n.id === source)?.data.spec);
   return (
     <>
       <h3>Edge</h3>
@@ -301,61 +293,22 @@ function EdgeInspector({ id }: { id: string }) {
         {source} → {target}
       </p>
       <Issues issues={issuesFor(validation, undefined, [source, target])} />
-      {topic && (
-        <Field label={topic.internal ? "Internal dataset" : "External topic"}>
-          <input value={topic.topic} readOnly />
-        </Field>
-      )}
-      {topic?.internal && (
-        <p className="note">Generated from the graph and owned by the pipeline; settings come from Defaults.InternalDatasets.</p>
-      )}
+      <Field label="Carries">
+        <span className="schema-chip" style={{ color: schemaColor(schema), borderColor: schemaColor(schema) }}>
+          {schema ?? "?"}
+        </span>
+      </Field>
     </>
   );
 }
 
-function PipelineInspector() {
-  const meta = useStudio((s) => s.meta);
-  const updateMeta = useStudio((s) => s.updateMeta);
+function NothingSelected() {
   const validation = useStudio((s) => s.validation);
-  if (!meta) return null;
-  const internal: InternalDatasets = meta.defaults.InternalDatasets ?? {};
-  const setInternal = (patch: Partial<InternalDatasets>) =>
-    updateMeta((m: Meta) => ({ ...m, defaults: { ...m.defaults, InternalDatasets: { ...(m.defaults.InternalDatasets ?? {}), ...patch } } }));
   const pipelineIssues = (validation?.errors ?? []).filter((e) => !e.node && !e.edge && !e.nodes.length);
-
   return (
     <>
-      <h3>Pipeline</h3>
       <Issues issues={pipelineIssues} />
-      <Field label="Name">
-        <TextInput value={meta.name} onChange={(v) => updateMeta((m) => ({ ...m, name: v }))} testId="pipeline-name" />
-      </Field>
-      <Field label="Registry" hint="Must be the PipelineDeploys container registry">
-        <TextInput
-          value={meta.defaults.Registry}
-          onChange={(v) => updateMeta((m) => ({ ...m, defaults: { ...m.defaults, Registry: v } }))}
-        />
-      </Field>
-      <h4>Internal datasets (defaults)</h4>
-      <p className="note">Topics between transformers, generated as &lt;Pipeline&gt;.&lt;Transformer&gt;.out.</p>
-      <Field label="Partitions">
-        <NumberInput value={internal.Partitions} onChange={(v) => setInternal({ Partitions: v })} />
-      </Field>
-      <Field label="ReplicationFactor">
-        <NumberInput value={internal.ReplicationFactor} onChange={(v) => setInternal({ ReplicationFactor: v })} />
-      </Field>
-      <Field label="RetentionMs">
-        <NumberInput value={internal.RetentionMs} onChange={(v) => setInternal({ RetentionMs: v })} />
-      </Field>
-      <ConnectionEditor value={internal.ConnectionSettings} onChange={(v) => setInternal({ ConnectionSettings: v })} prefix="internal" />
-      <h4>Schemas</h4>
-      {Object.entries(meta.schemas).map(([name, file]) => (
-        <Field key={name} label={name}>
-          <span className="muted" style={{ color: schemaColor(name) }}>
-            {file}
-          </span>
-        </Field>
-      ))}
+      <p className="note">Select a node or an edge to inspect it.</p>
     </>
   );
 }
@@ -370,7 +323,7 @@ export function Inspector() {
   } else if (selectedEdge) {
     body = <EdgeInspector id={selectedEdge.id} />;
   } else {
-    body = <PipelineInspector />;
+    body = <NothingSelected />;
   }
   return (
     <aside className="inspector" data-testid="inspector">

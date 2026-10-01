@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
-import { useStudio } from "../store";
+import { NAME_RE, useStudio } from "../store";
 import type { Issue } from "../types";
 
 const CI_LABEL: Record<string, string> = {
@@ -147,7 +147,16 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
         <option value="__new">+ New pipeline…</option>
       </select>
       <div className="pipeline-name" data-testid="pipeline-title">
-        {meta?.name || <span className="muted">unnamed</span>}
+        <input
+          className={`name-input${meta?.name && !NAME_RE.test(meta.name) ? " invalid" : ""}`}
+          value={meta?.name ?? ""}
+          placeholder="Name this pipeline"
+          size={Math.max(12, (meta?.name ?? "").length + 1)}
+          spellCheck={false}
+          title="Pipeline name (the manifest's Name). Click to edit."
+          onChange={(e) => useStudio.getState().updateMeta((m) => ({ ...m, name: e.target.value.trim() }))}
+          data-testid="pipeline-name"
+        />
         {dirty && <span className="dirty" title="Unsaved changes"> ●</span>}
       </div>
       <ValidationChip />

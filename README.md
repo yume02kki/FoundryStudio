@@ -129,21 +129,34 @@ Webhook deliveries trigger the same rescans as polling, which stays on as a safe
 
 ## Live data
 
-In the bottom panel, switch from **Project** to **Live data** and press **Start**. You'll see the Source (InputSink) and
-Output (OutputSink) topics side by side, so you can tell whether the pipeline is working:
+In the bottom panel, switch from **Project** to **Live data** and press **Start**. A strip of stages
+(Source → each transformer → Output) picks what you look at; clicking a node on the canvas selects
+its stage too.
 
-- **Flowing · N/min**: messages produced in the last minute. **Quiet**: connected, but nothing recent,
-  with how long ago the last message was. **Error**: e.g. brokers unreachable, or authentication failed.
-  It keeps retrying, so it recovers by itself.
-- Each message is checked against the sink's Ontology schema. JSON schemas are fully validated; XSDs
-  get a well-formedness check. Click a message to see the payload, partition, offset and the check result.
-- The Source and Output nodes show the same status, so you can see it at a glance while editing.
+- **A transformer** shows its input records next to its output records. They're matched by record
+  key: the Kafka key, which foundry-schemas sets to the packet `guid`, or else a `guid`/`id` field in
+  the payload. Each row says whether the record was transformed, is still pending, or was **dropped**
+  (no output after 5 s; Base64Decoder drops packets that aren't UTF-8 text). It also shows what
+  changed, e.g. `XML→JSON`, or `data` from base64 to text. Click a row for the field-by-field diff and
+  both payloads side by side. The header shows in/min, out/min, transformed and dropped counts.
+- **Source / Output** show that topic's messages.
+- **Status:** **Flowing · N/min** means messages were produced in the last minute. **Quiet** means
+  connected, but nothing recent. **Error** means, e.g., brokers unreachable or authentication failed.
+  It keeps retrying, so it recovers by itself. Each node on the canvas shows the status of the topic
+  it writes.
+- Every message is checked against its topic's schema: the sink's Ontology, or the transformer's
+  `OUT` for internal topics. JSON schemas are fully validated; XSDs get a well-formedness check.
+
+A transformer's input and output topics come from deploy.py's `endpoint_id`. Internal topics
+(`<Pipeline>.<Transformer>.out`) use `Defaults.InternalDatasets.ConnectionSettings`; the sinks use
+their own.
 
 It shows the last few messages of each partition, then follows new ones. It's **read-only**: Studio
 assigns partitions directly under a throwaway group id. It never joins the pipeline's `ConsumerGroup`,
 which would take partitions away from the real consumers, and never commits offsets. The connection
 settings are mapped exactly as the transformer runtime maps them (`backend/foundry_studio/peek.py`).
-SASL credentials come from `$FOUNDRY_SECRETS_DIR/<SecretRef>/username` and `/password`:
+SASL credentials come from `$FOUNDRY_SECRETS_DIR/<SecretRef>/username` and `/password` (for SWpipeline: the
+upstream, downstream and `kafka-internal-creds` secrets):
 
 ```sh
 mkdir -p ~/.foundry-secrets/upstream-kafka-creds ~/.foundry-secrets/downstream-kafka-creds
@@ -151,7 +164,8 @@ printf '%s' 'user' > ~/.foundry-secrets/upstream-kafka-creds/username   # likewi
 export FOUNDRY_SECRETS_DIR=~/.foundry-secrets
 ```
 
-The machine running the backend must be able to reach the sink brokers (e.g. `upstream-kafka:9092`).
+The machine running the backend must be able to reach the brokers (e.g. `upstream-kafka:9092`,
+`kafka-internal:9092`).
 In demo mode the feeds show generated sample messages, labelled **demo data**.
 
 ## How it works
@@ -189,10 +203,11 @@ always produces the same bytes, however it was dragged and wired. That makes the
 of a rebuilt SWpipeline byte-identical to the deployed one, so its Deploy is a no-op. The cost is
 that hand-written comments in a loaded manifest aren't preserved.
 
-Internal datasets are never edited by hand. They're shown as muted, read-only labels on
-transformer-to-transformer edges, named by deploy.py's `endpoint_id` (`<Pipeline>.<Transformer>.out`).
-Sinks have a `SecretRef` field and no password field, and deploy.py rejects credential-like keys
-anyway.
+Internal datasets (`<Pipeline>.<Transformer>.out`) and the pipeline-level settings (`Registry`,
+`Defaults.InternalDatasets`, `Schemas`) aren't shown or edited in the UI. They come from the loaded
+manifest, or for a new pipeline from foundry's example manifest, and are written back unchanged. The
+pipeline's name is edited in place in the top bar. Sinks have a `SecretRef` field and no password
+field, and deploy.py rejects credential-like keys anyway.
 
 ### Save, drafts and layout
 
@@ -280,7 +295,8 @@ make e2e      # Playwright, against a fresh offline demo
   - AC3: XmlToJson → OutputSink is refused with deploy.py's message
   - AC2: rebuild in the UI, Deploy reports "already up to date"
   - AC4–6: tag push → update badge, new folder → card, Deploy → MR chip running → failed → passed
-  - Live data: both sink feeds flowing, with schema checks
+  - Live data: each transformer's input paired with its output (format change, changed fields,
+    dropped records), and the sink feeds
 
 ## Layout
 
@@ -293,14 +309,14 @@ backend/foundry_studio/
   discovery.py     transformer crates, versions, transformer.yaml / inference
   watcher.py       polling + webhooks -> event bus
   pipelines.py     list / load / save drafts / deploy
-  peek.py          Live data: read-only sink topic feed, schema checks
+  peek.py          Live data: read-only topic feeds, schema checks
   gitlab.py        GitLab REST client
   fake_gitlab.py   GitLab look-alike on local git repos (tests, demo)
   gitenv.py        git credential helper, glab stand-in
   demo.py          offline demo repos + CLI
 frontend/src/
   components/      Canvas, PipelineNode, TopicEdge, AssetBrowser, Inspector, TopBar, LiveData, Dialogs
-  lib/             rules (wiring), versions, layout, feed health, schema colours
+  lib/             rules (wiring), versions, layout, feed health, stages/pairing/diff, schema colours
   store.ts         zustand store
 upstream/          merge requests for foundry and skywalker
 vendor/foundry     foundry @ 982b6c3 (submodule)

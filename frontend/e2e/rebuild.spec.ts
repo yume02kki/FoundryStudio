@@ -46,7 +46,6 @@ test("AC2: SWpipeline rebuilt from scratch is byte-identical and deploys as alre
   await wire(page, handle(page, "InputSink", "out"), handle(page, "XmlToJson", "in"));
   await wire(page, handle(page, "XmlToJson", "out"), handle(page, "Base64Decoder", "in"));
   await expect(page.locator(".react-flow__edge")).toHaveCount(3);
-  await expect(page.getByTestId("topic-XmlToJson->Base64Decoder")).toHaveText("SWpipeline.XmlToJson.out");
   await expect(page.getByTestId("validation-status")).toContainText("valid");
 
   await page.getByTestId("deploy").click();

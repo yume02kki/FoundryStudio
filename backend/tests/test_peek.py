@@ -19,7 +19,10 @@ from fastapi.testclient import TestClient
 from foundry_studio.app import Services, create_app
 from foundry_studio.config import Settings
 from foundry_studio.manifest import manifest_to_graph
-from foundry_studio.peek import FormatChecker, PeekError, client_config, demo_feed, kafka_feed
+from foundry_studio.peek import (
+    FormatChecker, PeekError, client_config, demo_feed, demo_record, demo_value, kafka_feed,
+)
+from foundry_studio.validation import Validator
 
 from .conftest import FOUNDRY_DIR
 
@@ -92,6 +95,31 @@ async def test_demo_feed_matches_its_schemas():
         assert all(m["check"]["ok"] for m in msgs), [m["check"] for m in msgs]
 
 
+def test_demo_records_line_up_across_topics():
+    """Record n has the same key on every topic; the decoded topic drops non-UTF-8 data."""
+    for n in range(14):
+        rec = demo_record(n)
+        xml, enc, dec = (demo_value(s, rec) for s in ("XmlPackets", "EncodedPackets", "Packets"))
+        assert rec["guid"] in xml.decode() and json.loads(enc)["guid"] == rec["guid"]
+        if n % 7 == 3:
+            assert dec is None
+        else:
+            assert json.loads(dec)["data"] == rec["data"].decode()
+
+
+def test_endpoints_follow_deploy_py(foundry):
+    graph = manifest_to_graph((FOUNDRY_DIR / "PipelineManifest.yaml").read_text())
+    v = Validator(foundry)
+    assert v.endpoint(graph, "InputSink")["topic"] == "raw.xml"
+    x = v.endpoint(graph, "XmlToJson")
+    assert (x["topic"], x["schema"], x["internal"]) == ("SWpipeline.XmlToJson.out", "EncodedPackets", True)
+    assert x["connection"]["Brokers"] == "kafka-internal:9092"  # Defaults.InternalDatasets
+    b = v.endpoint(graph, "Base64Decoder")  # feeds OutputSink, so it writes the sink's topic
+    assert (b["endpoint"], b["topic"], b["schema"], b["internal"]) == ("OutputSink", "packets.decoded", "Packets", False)
+    with pytest.raises(ValueError):
+        v.endpoint(graph, "Nope")
+
+
 def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake, foundry):
     import socket
     import threading
@@ -115,17 +143,19 @@ def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake
     graph = manifest_to_graph((FOUNDRY_DIR / "PipelineManifest.yaml").read_text())
     base = f"http://127.0.0.1:{port}"
     try:
-        assert httpx.post(f"{base}/api/peek", json={"graph": graph, "node": "XmlToJson"}).status_code == 400
+        assert httpx.post(f"{base}/api/peek", json={"graph": graph, "node": "Nope"}).status_code == 400
         events = []
         with httpx.stream("POST", f"{base}/api/peek", json={"graph": graph, "node": "OutputSink"}, timeout=10) as r:
             assert r.headers["content-type"].startswith("text/event-stream")
             for line in r.iter_lines():
                 if line.startswith("data: "):
                     events.append(json.loads(line[6:]))
-                if len(events) >= 4:
+                if len(events) >= 5:
                     break
-        assert events[0]["state"] == "live"
-        assert all(e["check"] == {"ok": True, "detail": "matches Packets"} for e in events[1:])
+        assert events[0] == {"type": "endpoint", "endpoint": "OutputSink", "topic": "packets.decoded",
+                             "schema": "Packets", "internal": False}
+        assert events[1]["state"] == "live"
+        assert all(e["check"] == {"ok": True, "detail": "matches Packets"} for e in events[2:])
         # Closing the stream releases the feed (the semaphore slot comes back).
         deadline = time.time() + 10
         while services.peeks._value != 8 and time.time() < deadline:
