@@ -1,0 +1,244 @@
+"""Live sink feed: config parity with the transformer runtime, schema checks, the demo
+stream, and (when a broker is available) a real Kafka topic.
+
+The Kafka tests run when STUDIO_TEST_KAFKA is set, e.g.
+STUDIO_TEST_KAFKA=127.0.0.1:19092 STUDIO_TEST_KAFKA_SASL=127.0.0.1:19093 (SCRAM-SHA-512 user
+peeker / s3cret-pw).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import uuid
+
+import pytest
+from fastapi.testclient import TestClient
+
+from foundry_studio.app import Services, create_app
+from foundry_studio.config import Settings
+from foundry_studio.manifest import manifest_to_graph
+from foundry_studio.peek import FormatChecker, PeekError, client_config, demo_feed, kafka_feed
+
+from .conftest import FOUNDRY_DIR
+
+SCHEMAS = FOUNDRY_DIR / "schemas"
+PACKET = {"guid": "3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17", "data": "Hello, world!", "time_sent": "2026-10-01T14:32:05.123Z",
+          "host_ip": "10.0.4.17", "target_ip": "2001:db8::42"}
+XML = (b"<packet><guid>3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17</guid><data>SGVsbG8=</data>"
+       b"<time_sent>2026-10-01T14:32:05.123Z</time_sent><host_ip>10.0.4.17</host_ip><target_ip>2001:db8::42</target_ip></packet>")
+
+
+def secrets(tmp_path, name="kafka-creds", user="peeker", password="s3cret-pw"):
+    d = tmp_path / "secrets" / name
+    d.mkdir(parents=True)
+    (d / "username").write_text(user + "\n")
+    (d / "password").write_text(password + "\n")
+    return tmp_path / "secrets"
+
+
+def test_client_config_mirrors_the_runtime(tmp_path):
+    cfg = client_config({
+        "Brokers": "upstream-kafka:9092", "SecurityProtocol": "SASL_SSL", "SaslMechanism": "SCRAM-SHA-512",
+        "SecretRef": "kafka-creds", "ConsumerGroup": "swpipeline", "ssl.ca.location": "/etc/ca.pem",
+    }, secrets(tmp_path))
+    assert cfg["bootstrap.servers"] == "upstream-kafka:9092"
+    assert cfg["security.protocol"] == "sasl_ssl"
+    assert (cfg["sasl.mechanism"], cfg["sasl.username"], cfg["sasl.password"]) == ("SCRAM-SHA-512", "peeker", "s3cret-pw")
+    assert cfg["ssl.ca.location"] == "/etc/ca.pem"
+    # Never the pipeline's group, never commits.
+    assert cfg["group.id"].startswith("foundry-studio-peek-") and "swpipeline" not in cfg["group.id"]
+    assert cfg["enable.auto.commit"] == "false"
+
+
+@pytest.mark.parametrize("settings, message", [
+    ({}, "no Brokers"),
+    ({"Brokers": "b:9092", "Timeout": "5"}, "unknown connection setting 'Timeout'"),
+    ({"Brokers": "b:9092", "SecurityProtocol": "SASL_SSL", "SecretRef": "x"}, "needs a SaslMechanism"),
+    ({"Brokers": "b:9092", "SecurityProtocol": "SASL_SSL", "SaslMechanism": "PLAIN"}, "needs a SecretRef"),
+    ({"Brokers": "b:9092", "SecurityProtocol": "SASL_SSL", "SaslMechanism": "PLAIN", "SecretRef": "missing"},
+     "FOUNDRY_SECRETS_DIR/missing/username"),
+])
+def test_client_config_errors(settings, message, tmp_path):
+    with pytest.raises(PeekError, match=message.replace("(", r"\(")):
+        client_config(settings, tmp_path)
+
+
+def test_format_checks():
+    packets = FormatChecker("Packets", "schemas/packets.schema.json", (SCHEMAS / "packets.schema.json").read_bytes())
+    assert packets.check(json.dumps(PACKET).encode()) == {"ok": True, "detail": "matches Packets"}
+    bad = packets.check(json.dumps({**PACKET, "extra": 1}).encode())
+    assert not bad["ok"] and "doesn't match Packets" in bad["detail"]
+    assert not packets.check(b"<packet/>")["ok"]
+    xml = FormatChecker("XmlPackets", "schemas/xml_packets.xsd", (SCHEMAS / "xml_packets.xsd").read_bytes())
+    assert xml.check(XML)["ok"] and not xml.check(b"<packet>")["ok"]
+    assert FormatChecker(None, None, None).check(b"x")["ok"] is None
+
+
+@pytest.mark.anyio
+async def test_demo_feed_matches_its_schemas():
+    for schema, file in (("XmlPackets", "xml_packets.xsd"), ("EncodedPackets", "encoded_packets.schema.json"),
+                         ("Packets", "packets.schema.json")):
+        checker = FormatChecker(schema, file, (SCHEMAS / file).read_bytes())
+        stop = asyncio.Event()
+        events = []
+        async for e in demo_feed(schema, "t", checker, stop, interval=0.01):
+            events.append(e)
+            if len(events) == 8:
+                stop.set()
+        msgs = [e for e in events if e["type"] == "message"]
+        assert events[0]["demo"] and len(msgs) >= 5
+        assert all(m["check"]["ok"] for m in msgs), [m["check"] for m in msgs]
+
+
+def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake, foundry):
+    import socket
+    import threading
+    import time
+
+    import httpx
+    import uvicorn
+
+    settings = Settings(foundry_dir=FOUNDRY_DIR, workspace=demo_root / "ws")
+    services = Services(settings, fake, foundry, fake_root=demo_root)
+    app = create_app(services, start_watcher=False)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning",
+                                           timeout_graceful_shutdown=5))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    while not server.started:
+        time.sleep(0.05)
+    graph = manifest_to_graph((FOUNDRY_DIR / "PipelineManifest.yaml").read_text())
+    base = f"http://127.0.0.1:{port}"
+    try:
+        assert httpx.post(f"{base}/api/peek", json={"graph": graph, "node": "XmlToJson"}).status_code == 400
+        events = []
+        with httpx.stream("POST", f"{base}/api/peek", json={"graph": graph, "node": "OutputSink"}, timeout=10) as r:
+            assert r.headers["content-type"].startswith("text/event-stream")
+            for line in r.iter_lines():
+                if line.startswith("data: "):
+                    events.append(json.loads(line[6:]))
+                if len(events) >= 4:
+                    break
+        assert events[0]["state"] == "live"
+        assert all(e["check"] == {"ok": True, "detail": "matches Packets"} for e in events[1:])
+        # Closing the stream releases the feed (the semaphore slot comes back).
+        deadline = time.time() + 10
+        while services.peeks._value != 8 and time.time() < deadline:
+            time.sleep(0.1)
+        assert services.peeks._value == 8
+    finally:
+        server.should_exit = True
+        thread.join(10)
+    assert not thread.is_alive()
+
+
+# --------------------------------------------------------------------------- #
+# Against a real broker
+# --------------------------------------------------------------------------- #
+
+KAFKA = os.environ.get("STUDIO_TEST_KAFKA")
+KAFKA_SASL = os.environ.get("STUDIO_TEST_KAFKA_SASL")
+needs_kafka = pytest.mark.skipif(not KAFKA, reason="set STUDIO_TEST_KAFKA to a broker to run")
+
+
+def make_topic(partitions=3) -> str:
+    from confluent_kafka.admin import AdminClient, NewTopic
+
+    topic = f"peek-test-{uuid.uuid4().hex[:8]}"
+    admin = AdminClient({"bootstrap.servers": KAFKA})
+    admin.create_topics([NewTopic(topic, partitions, 1)])[topic].result(15)
+    return topic
+
+
+def produce(topic, values):
+    from confluent_kafka import Producer
+
+    p = Producer({"bootstrap.servers": KAFKA})
+    for i, v in enumerate(values):
+        p.produce(topic, v, key=str(i).encode(), partition=i % 3)
+    p.flush(15)
+
+
+async def collect(feed, until, timeout=30):
+    events = []
+
+    async def run():
+        async for e in feed:
+            events.append(e)
+            if until(events):
+                return
+
+    await asyncio.wait_for(run(), timeout)
+    return events
+
+
+@needs_kafka
+@pytest.mark.anyio
+async def test_kafka_feed_history_then_live_without_touching_groups(tmp_path):
+    from confluent_kafka import Consumer, TopicPartition
+    from confluent_kafka.admin import AdminClient
+
+    topic = make_topic()
+    produce(topic, [XML] * 29 + [b"<packet>broken"])
+    # The pipeline's own consumer group has committed offsets that must not move.
+    group = f"pipeline-{uuid.uuid4().hex[:6]}"
+    c = Consumer({"bootstrap.servers": KAFKA, "group.id": group, "enable.auto.commit": "false"})
+    c.commit(offsets=[TopicPartition(topic, p, 2) for p in range(3)], asynchronous=False)
+    c.close()
+
+    brokers, protocol = (KAFKA_SASL, "SASL_PLAINTEXT") if KAFKA_SASL else (KAFKA, "PLAINTEXT")
+    settings = {"Brokers": brokers, "SecurityProtocol": protocol, "ConsumerGroup": group}
+    if KAFKA_SASL:
+        settings |= {"SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-creds"}
+    cfg = client_config(settings, secrets(tmp_path))
+    checker = FormatChecker("XmlPackets", "xml_packets.xsd", b"")
+    stop = asyncio.Event()
+    feed = kafka_feed(cfg, topic, checker, stop, history=9)
+
+    events = await collect(feed, lambda ev: sum(e["type"] == "message" for e in ev) >= 9)
+    status = [e for e in events if e["type"] == "status"]
+    assert [s["state"] for s in status] == ["connecting", "live"] and status[1]["partitions"] == 3
+    history = [e for e in events if e["type"] == "message"]
+    assert len(history) == 9  # 3 most recent per partition
+    assert sum(not m["check"]["ok"] for m in history) == 1  # the broken one is flagged
+
+    produce(topic, [b"<packet>new</packet>"])
+    events = await collect(feed, lambda ev: any(e["type"] == "message" for e in ev))
+    assert next(e for e in events if e["type"] == "message")["value"] == "<packet>new</packet>"
+    stop.set()
+    await feed.aclose()
+
+    admin = AdminClient({"bootstrap.servers": KAFKA})
+    groups = [g.group_id for g in admin.list_consumer_groups().result(10).valid]
+    assert not any(g.startswith("foundry-studio-peek-") for g in groups)
+    c = Consumer({"bootstrap.servers": KAFKA, "group.id": group})
+    assert [tp.offset for tp in c.committed([TopicPartition(topic, p) for p in range(3)], timeout=10)] == [2, 2, 2]
+    c.close()
+
+
+@needs_kafka
+@pytest.mark.anyio
+async def test_kafka_feed_reports_bad_credentials_and_unreachable_brokers(tmp_path):
+    stop = asyncio.Event()
+    if KAFKA_SASL:
+        cfg = client_config({"Brokers": KAFKA_SASL, "SecurityProtocol": "SASL_PLAINTEXT",
+                             "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-creds"},
+                            secrets(tmp_path, password="wrong"))
+        feed = kafka_feed(cfg, make_topic(), FormatChecker(None, None, None), stop)
+        events = await collect(feed, lambda ev: any(e.get("state") == "error" for e in ev))
+        assert "authentication" in next(e for e in events if e.get("state") == "error")["message"].lower()
+        stop.set()
+        await feed.aclose()
+
+    stop = asyncio.Event()
+    cfg = client_config({"Brokers": "127.0.0.1:1"}, tmp_path)
+    feed = kafka_feed(cfg, "anything", FormatChecker(None, None, None), stop)
+    events = await collect(feed, lambda ev: any(e.get("state") == "error" for e in ev))
+    assert any(e.get("state") == "error" for e in events)
+    stop.set()
+    await feed.aclose()

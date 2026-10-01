@@ -12,9 +12,15 @@ import {
   type MergeRequest,
   type PipelineListing,
   type TransformerInfo,
+  type FeedMessage,
+  type FeedState,
+  type SinkId,
   type ValidationResult,
   type WatcherStatus,
 } from "./types";
+
+const FEED_KEEP = 200;
+const idleFeed = (): FeedState => ({ state: "idle", messages: [], count: 0 });
 
 export type PipelineNodeData = { spec: GraphNode };
 export type PNode = Node<PipelineNodeData, "pipeline">;
@@ -88,6 +94,9 @@ interface State {
   toasts: Toast[];
   theme: Theme;
   issuesOpen: boolean;
+  drawerTab: "problems" | "live";
+  feedsOn: boolean;
+  feeds: Record<SinkId, FeedState>;
   versionPickerFor: string | null;
   deployOpen: boolean;
   busy: "save" | "deploy" | null;
@@ -111,6 +120,9 @@ interface State {
   removeTransformer: (id: string) => void;
 
   setTheme: (theme: Theme) => void;
+  feedStatus: (sink: SinkId, status: Partial<FeedState>) => void;
+  feedMessage: (sink: SinkId, message: FeedMessage) => void;
+  resetFeeds: () => void;
   toast: (t: Omit<Toast, "id">, ttl?: number) => void;
   dismiss: (id: number) => void;
 }
@@ -140,6 +152,9 @@ export const useStudio = create<State>()((set, get) => ({
   toasts: [],
   theme: loadTheme(),
   issuesOpen: false,
+  drawerTab: "problems",
+  feedsOn: false,
+  feeds: { InputSink: idleFeed(), OutputSink: idleFeed() },
   versionPickerFor: null,
   deployOpen: false,
   busy: null,
@@ -287,6 +302,19 @@ export const useStudio = create<State>()((set, get) => ({
       delete transformers[id];
       return { transformers };
     }),
+
+  feedStatus: (sink, status) =>
+    set((s) => ({ feeds: { ...s.feeds, [sink]: { ...s.feeds[sink], ...status } } })),
+
+  feedMessage: (sink, message) =>
+    set((s) => {
+      const f = s.feeds[sink];
+      return {
+        feeds: { ...s.feeds, [sink]: { ...f, messages: [message, ...f.messages].slice(0, FEED_KEEP), count: f.count + 1 } },
+      };
+    }),
+
+  resetFeeds: () => set({ feeds: { InputSink: idleFeed(), OutputSink: idleFeed() } }),
 
   setTheme: (theme) => {
     try {

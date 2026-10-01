@@ -31,6 +31,9 @@ class Settings:
     workspace: Path = REPO_ROOT / "workspace"
     # "demo" or a directory: serve GitLab from local git repos instead of gitlab.com.
     fake_gitlab: str | None = None
+    # Kafka credentials for the live feed, laid out like the transformer runtime's:
+    # <secrets_dir>/<SecretRef>/username and /password.
+    secrets_dir: Path = Path("/var/run/secrets/foundry")
 
     @property
     def token(self) -> str | None:
@@ -57,4 +60,6 @@ class Settings:
         if env.get("STUDIO_WORKSPACE"):
             s.workspace = Path(env["STUDIO_WORKSPACE"]).resolve()
         s.fake_gitlab = env.get("STUDIO_FAKE_GITLAB") or None
+        if env.get("FOUNDRY_SECRETS_DIR"):
+            s.secrets_dir = Path(env["FOUNDRY_SECRETS_DIR"]).expanduser().resolve()
         return s

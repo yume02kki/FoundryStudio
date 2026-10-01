@@ -23,6 +23,7 @@ from .fake_gitlab import FakeGitLab
 from .foundry import Foundry
 from .gitlab import GitLab, HttpGitLab
 from .manifest import SINK, SOURCE, graph_to_manifest
+from .peek import FormatChecker, PeekError, client_config, demo_feed, kafka_feed
 from .pipelines import PipelineError, PipelineStore
 from .validation import Validator
 from .watcher import EventBus, Watcher
@@ -37,6 +38,11 @@ class GraphBody(BaseModel):
 class SaveBody(BaseModel):
     graph: dict
     layout: dict | None = None
+
+
+class PeekBody(BaseModel):
+    graph: dict
+    node: str  # InputSink | OutputSink
 
 
 class EdgeBody(BaseModel):
@@ -56,8 +62,42 @@ class Services:
         self.validator = Validator(foundry)
         self.pipelines = PipelineStore(gitlab, foundry, settings.workspace, settings.deploys_project,
                                        settings.deploys_base)
+        self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.transformer_projects,
                                settings.deploys_project, settings.poll_interval, settings.full_rescan_interval)
+
+
+def _sse(event: dict) -> str:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n"
+
+
+async def _single(event: dict):
+    yield event
+
+
+async def _until_disconnected(feed, request: Request, stop: asyncio.Event):
+    """Relay a feed, with keep-alives, until it ends or the browser goes away."""
+    nxt = asyncio.ensure_future(anext(feed, None))
+    try:
+        while True:
+            done, _ = await asyncio.wait({nxt}, timeout=10)
+            if await request.is_disconnected():
+                return
+            if not done:
+                yield {"type": "ping"}
+                continue
+            event = nxt.result()
+            if event is None:
+                return
+            yield event
+            nxt = asyncio.ensure_future(anext(feed, None))
+    finally:
+        stop.set()
+        if not nxt.done():
+            try:
+                await asyncio.wait_for(nxt, timeout=3)
+            except (asyncio.TimeoutError, Exception):
+                nxt.cancel()
 
 
 def build_services(settings: Settings) -> Services:
@@ -184,6 +224,48 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
     @app.get("/api/merge-requests/latest")
     async def latest_mr(request: Request):
         return {"mr": svc(request).watcher.latest_mr}
+
+    @app.post("/api/peek")
+    async def peek(body: PeekBody, request: Request):
+        """Server-Sent Events: a read-only live feed of a sink topic (see peek.py)."""
+        s = svc(request)
+        if body.node not in (SOURCE, SINK):
+            raise HTTPException(400, "node must be InputSink or OutputSink")
+        node = next((n for n in body.graph.get("nodes", []) if n.get("id") == body.node), None)
+        sink = (node or {}).get("sink") or {}
+        topic = str(sink.get("Topic") or "")
+        if not topic:
+            raise HTTPException(400, f"{body.node} has no Topic")
+        ontology = sink.get("Ontology")
+        schema_file = (body.graph.get("schemas") or {}).get(ontology) if ontology else None
+        schema_bytes = s.pipelines.schema_resolver(body.graph.get("name"))(schema_file) if schema_file else None
+        checker = FormatChecker(ontology, schema_file, schema_bytes)
+
+        stop = asyncio.Event()
+        if s.fake_root:
+            feed = demo_feed(ontology, topic, checker, stop)
+        else:
+            try:
+                cfg = client_config(sink.get("ConnectionSettings") or {}, s.settings.secrets_dir)
+            except PeekError as e:
+                feed = _single({"type": "status", "state": "error", "message": str(e)})
+            else:
+                feed = kafka_feed(cfg, topic, checker, stop)
+
+        async def stream():
+            if s.peeks.locked():
+                yield _sse({"type": "status", "state": "error", "message": "too many live feeds open"})
+                return
+            async with s.peeks:
+                try:
+                    async for event in _until_disconnected(feed, request, stop):
+                        yield _sse(event)
+                finally:
+                    stop.set()
+                    await feed.aclose()
+
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.post("/api/webhooks/gitlab", status_code=202)
     async def webhook(request: Request):

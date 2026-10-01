@@ -38,8 +38,8 @@ export async function saveDraft() {
 function ValidationStatus() {
   const validation = useStudio((s) => s.validation);
   const validating = useStudio((s) => s.validating);
-  const open = useStudio((s) => s.issuesOpen);
-  const toggle = () => useStudio.setState({ issuesOpen: !open });
+  const open = useStudio((s) => s.issuesOpen && s.drawerTab === "problems");
+  const toggle = () => useStudio.setState({ issuesOpen: !open, drawerTab: "problems" });
 
   if (!validation) {
     return <span className="status status-muted">{validating ? "Validating…" : "Not validated"}</span>;

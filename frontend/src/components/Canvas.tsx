@@ -2,7 +2,6 @@ import {
   Background,
   BackgroundVariant,
   Controls,
-  MiniMap,
   ReactFlow,
   useReactFlow,
   type Connection,
@@ -53,6 +52,13 @@ export function Canvas() {
     const t = setTimeout(() => flow.fitView({ padding: 0.12, maxZoom: 1.1, duration: 200 }), 60);
     return () => clearTimeout(t);
   }, [loadId, flow]);
+
+  // The drawer under the canvas changes its height: keep the pipeline in view.
+  const drawer = useStudio((s) => `${s.issuesOpen}:${s.drawerTab}`);
+  useEffect(() => {
+    const t = setTimeout(() => flow.fitView({ padding: 0.12, maxZoom: 1.1, duration: 200 }), 80);
+    return () => clearTimeout(t);
+  }, [drawer, flow]);
 
   useEffect(() => {
     if (focus?.nodes.length) {
@@ -124,7 +130,6 @@ export function Canvas() {
       >
         <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} color="var(--grid)" />
         <Controls showInteractive={false} position="bottom-left" />
-        <MiniMap pannable zoomable position="bottom-right" nodeBorderRadius={6} style={{ width: 150, height: 96 }} />
       </ReactFlow>
       {empty && (
         <div className="canvas-hint">

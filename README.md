@@ -95,6 +95,7 @@ All configuration comes from environment variables; the defaults fit the yume02k
 | `GITLAB_WEBHOOK_SECRET` | – | Enables `/api/webhooks/gitlab` |
 | `STUDIO_WORKSPACE` | `./workspace` | Where Save writes drafts |
 | `STUDIO_FAKE_GITLAB` | – | `demo`, or a directory of local repos (tests, e2e) |
+| `FOUNDRY_SECRETS_DIR` | `/var/run/secrets/foundry` | Kafka credentials for Live data: `<dir>/<SecretRef>/username` and `/password`, as the transformer runtime reads them |
 | `FOUNDRY_DIR` | `./vendor/foundry` | Use another foundry checkout |
 
 ## Real-time updates
@@ -125,6 +126,33 @@ When GitLab can reach the backend (a deployed instance, or a tunnel such as
    switches to `webhook+polling`.
 
 Webhook deliveries trigger the same rescans as polling, which stays on as a safety net.
+
+## Live data
+
+Open the **Live data** tab under the canvas and press **Start**. You'll see the Source (InputSink) and
+Output (OutputSink) topics side by side, so you can tell whether the pipeline is working:
+
+- **Flowing · N/min**: messages produced in the last minute. **Quiet**: connected, but nothing recent,
+  with how long ago the last message was. **Error**: e.g. brokers unreachable, or authentication failed.
+  It keeps retrying, so it recovers by itself.
+- Each message is checked against the sink's Ontology schema. JSON schemas are fully validated; XSDs
+  get a well-formedness check. Click a message to see the payload, partition, offset and the check result.
+- The Source and Output nodes show the same status, so you can see it at a glance while editing.
+
+It shows the last few messages of each partition, then follows new ones. It's **read-only**: Studio
+assigns partitions directly under a throwaway group id. It never joins the pipeline's `ConsumerGroup`,
+which would take partitions away from the real consumers, and never commits offsets. The connection
+settings are mapped exactly as the transformer runtime maps them (`backend/foundry_studio/peek.py`).
+SASL credentials come from `$FOUNDRY_SECRETS_DIR/<SecretRef>/username` and `/password`:
+
+```sh
+mkdir -p ~/.foundry-secrets/upstream-kafka-creds ~/.foundry-secrets/downstream-kafka-creds
+printf '%s' 'user' > ~/.foundry-secrets/upstream-kafka-creds/username   # likewise password, downstream
+export FOUNDRY_SECRETS_DIR=~/.foundry-secrets
+```
+
+The machine running the backend must be able to reach the sink brokers (e.g. `upstream-kafka:9092`).
+In demo mode the feeds show generated sample messages, labelled **demo data**.
 
 ## How it works
 
@@ -235,19 +263,24 @@ make test     # backend pytest + frontend typecheck and vitest
 make e2e      # Playwright, against a fresh offline demo
 ```
 
-- **Backend** (`backend/tests`, 40 tests), using the git-backed fake GitLab:
+- **Backend** (`backend/tests`, 51 tests), using the git-backed fake GitLab:
   - discovery: transformer.yaml vs inferred, semver ordering, non-transformer crates
   - the manifest round trip, byte-identical, including rebuilds in a dozen drag/wire orders
   - `deploy.py render` of a rebuilt SWpipeline being byte-identical to the deployed tree, and its
     deploy being "already up to date"
   - validation passthrough, comparing against the `deploy.py validate` CLI case by case
   - the watcher: new tag, new or removed folder, MR CI changes, webhooks and the token check
-- **Frontend** (`frontend/src/**/*.test.ts`): connection type rules and version and update logic.
+  - Live data: connection-setting parity with the runtime, schema checks, and the stream stopping when
+    the browser disconnects. Against a real broker (run when `STUDIO_TEST_KAFKA` is set) it also covers
+    SCRAM auth via SecretRef, history then live messages, bad credentials, unreachable brokers, and the
+    pipeline's consumer group offsets staying untouched.
+- **Frontend** (`frontend/src/**/*.test.ts`): connection type rules, version and update logic, feed health.
 - **End-to-end** (`frontend/e2e`):
   - AC1: SWpipeline draws with the right schema on each port
   - AC3: XmlToJson → OutputSink is refused with deploy.py's message
   - AC2: rebuild in the UI, Deploy reports "already up to date"
   - AC4–6: tag push → update badge, new folder → card, Deploy → MR chip running → failed → passed
+  - Live data: both sink feeds flowing, with schema checks
 
 ## Layout
 
@@ -260,13 +293,14 @@ backend/foundry_studio/
   discovery.py     transformer crates, versions, transformer.yaml / inference
   watcher.py       polling + webhooks -> event bus
   pipelines.py     list / load / save drafts / deploy
+  peek.py          Live data: read-only sink topic feed, schema checks
   gitlab.py        GitLab REST client
   fake_gitlab.py   GitLab look-alike on local git repos (tests, demo)
   gitenv.py        git credential helper, glab stand-in
   demo.py          offline demo repos + CLI
 frontend/src/
-  components/      Canvas, PipelineNode, TopicEdge, AssetBrowser, Inspector, TopBar, Dialogs
-  lib/             rules (wiring), versions, layout, schema colours
+  components/      Canvas, PipelineNode, TopicEdge, Library, Inspector, TopBar, BottomPanel, LiveData, Dialogs
+  lib/             rules (wiring), versions, layout, feed health, schema colours
   store.ts         zustand store
 upstream/          merge requests for foundry and skywalker
 vendor/foundry     foundry @ 982b6c3 (submodule)

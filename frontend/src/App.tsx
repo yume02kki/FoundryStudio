@@ -4,7 +4,8 @@ import { api, subscribe } from "./api";
 import { Canvas } from "./components/Canvas";
 import { DeployDialog, Toasts, VersionPicker } from "./components/Dialogs";
 import { Inspector } from "./components/Inspector";
-import { IssuesPanel } from "./components/IssuesPanel";
+import { BottomPanel } from "./components/BottomPanel";
+import { useLiveFeeds } from "./components/LiveData";
 import { Library } from "./components/Library";
 import { saveDraft, TopBar } from "./components/TopBar";
 import { SINK, SOURCE } from "./types";
@@ -106,6 +107,7 @@ export default function App() {
   useLiveUpdates();
   useTheme();
   useShortcuts();
+  useLiveFeeds();
 
   const confirmDiscard = () => !useStudio.getState().dirty || window.confirm("Discard unsaved changes?");
 
@@ -155,7 +157,7 @@ export default function App() {
           <Library />
           <div className="center">
             <Canvas />
-            <IssuesPanel />
+            <BottomPanel />
           </div>
           <Inspector />
         </main>

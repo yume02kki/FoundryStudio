@@ -164,3 +164,27 @@ export interface DeployResult {
   branch?: string | null;
   log: string;
 }
+
+export interface FeedMessage {
+  partition: number;
+  offset: number;
+  timestamp: string | null;
+  key: string | null;
+  value: string | null;
+  encoding: "text" | "base64" | "none";
+  truncated: boolean;
+  size: number;
+  check: { ok: boolean | null; detail: string };
+  receivedAt: number;
+}
+
+export interface FeedState {
+  state: "idle" | "connecting" | "live" | "error";
+  message?: string;
+  demo?: boolean;
+  partitions?: number;
+  messages: FeedMessage[]; // newest first
+  count: number;
+}
+
+export type SinkId = "InputSink" | "OutputSink";

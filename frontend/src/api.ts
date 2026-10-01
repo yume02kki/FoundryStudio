@@ -1,5 +1,6 @@
 import type {
   DeployResult,
+  FeedMessage,
   Graph,
   Health,
   Issue,
@@ -65,6 +66,48 @@ export const api = {
   deploy: (graph: Graph) => call<DeployResult>("/api/deploy", { method: "POST", json: { graph } }),
   latestMr: () => call<{ mr: MergeRequest | null }>("/api/merge-requests/latest"),
 };
+
+export type PeekEvent =
+  | { type: "status"; state: "connecting" | "live" | "error"; message?: string; demo?: boolean; partitions?: number }
+  | ({ type: "message" } & Omit<FeedMessage, "receivedAt">)
+  | { type: "ping" };
+
+/** Read-only live feed of a sink topic (POST + streamed Server-Sent Events). Resolves when the stream ends. */
+export async function peek(graph: Graph, node: string, onEvent: (e: PeekEvent) => void, signal: AbortSignal) {
+  const res = await fetch("/api/peek", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ graph, node }),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    let detail = res.statusText;
+    try {
+      detail = (await res.json()).detail ?? detail;
+    } catch {
+      /* not JSON */
+    }
+    throw new ApiError(res.status, detail);
+  }
+  const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+  let buf = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return;
+    buf += value;
+    let i;
+    while ((i = buf.indexOf("\n\n")) >= 0) {
+      const chunk = buf.slice(0, i);
+      buf = buf.slice(i + 2);
+      const data = chunk
+        .split("\n")
+        .filter((l) => l.startsWith("data: "))
+        .map((l) => l.slice(6))
+        .join("\n");
+      if (data) onEvent(JSON.parse(data) as PeekEvent);
+    }
+  }
+}
 
 export type ServerEvent =
   | { type: "transformer.added"; transformer: TransformerInfo }
