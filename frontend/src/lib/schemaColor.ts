@@ -1,7 +1,6 @@
-// One colour per schema, stable across pipelines (derived from the name). Mid-tone
-// hues that read on both the light and the dark theme; no reds, which mean "error".
-const PALETTE = ["#7961db", "#00a396", "#946638", "#d1980b", "#147eb3", "#29a634", "#c22762", "#634dbf"];
-const UNTYPED = "#8f99a8";
+// One colour per schema, stable across pipelines (derived from the name).
+const PALETTE = ["#e8a33d", "#9b7be0", "#3fb8a9", "#e5c07b", "#61afef", "#98c379", "#d19a66", "#c678dd"];
+const UNTYPED = "#6b6b6b";
 
 export const ALL_COLORS = [...PALETTE, UNTYPED];
 

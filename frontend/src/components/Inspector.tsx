@@ -374,6 +374,9 @@ export function Inspector() {
   }
   return (
     <aside className="inspector" data-testid="inspector">
+      <div className="panel-tabs">
+        <span className="tab active">Inspector</span>
+      </div>
       <div className="inspector-body">{body}</div>
     </aside>
   );

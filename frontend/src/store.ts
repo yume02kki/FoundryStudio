@@ -10,11 +10,11 @@ import {
   type Health,
   type Layout,
   type MergeRequest,
-  type PipelineListing,
-  type TransformerInfo,
   type FeedMessage,
   type FeedState,
+  type PipelineListing,
   type SinkId,
+  type TransformerInfo,
   type ValidationResult,
   type WatcherStatus,
 } from "./types";
@@ -39,17 +39,6 @@ export interface Toast {
   text: string;
   link?: { href: string; label: string };
   testId?: string;
-}
-
-export type Theme = "system" | "light" | "dark";
-
-function loadTheme(): Theme {
-  try {
-    const t = localStorage.getItem("foundry-studio.theme");
-    return t === "light" || t === "dark" ? t : "system";
-  } catch {
-    return "system";
-  }
 }
 
 export type Origin = { kind: "new" } | { kind: "draft" | "deployed"; name: string };
@@ -92,9 +81,7 @@ interface State {
   live: boolean;
 
   toasts: Toast[];
-  theme: Theme;
-  issuesOpen: boolean;
-  drawerTab: "problems" | "live";
+  bottomTab: "project" | "live";
   feedsOn: boolean;
   feeds: Record<SinkId, FeedState>;
   versionPickerFor: string | null;
@@ -119,10 +106,8 @@ interface State {
   upsertTransformer: (info: TransformerInfo, kind: "added" | "updated") => void;
   removeTransformer: (id: string) => void;
 
-  setTheme: (theme: Theme) => void;
   feedStatus: (sink: SinkId, status: Partial<FeedState>) => void;
   feedMessage: (sink: SinkId, message: FeedMessage) => void;
-  resetFeeds: () => void;
   toast: (t: Omit<Toast, "id">, ttl?: number) => void;
   dismiss: (id: number) => void;
 }
@@ -150,9 +135,7 @@ export const useStudio = create<State>()((set, get) => ({
   live: false,
 
   toasts: [],
-  theme: loadTheme(),
-  issuesOpen: false,
-  drawerTab: "problems",
+  bottomTab: "project",
   feedsOn: false,
   feeds: { InputSink: idleFeed(), OutputSink: idleFeed() },
   versionPickerFor: null,
@@ -313,17 +296,6 @@ export const useStudio = create<State>()((set, get) => ({
         feeds: { ...s.feeds, [sink]: { ...f, messages: [message, ...f.messages].slice(0, FEED_KEEP), count: f.count + 1 } },
       };
     }),
-
-  resetFeeds: () => set({ feeds: { InputSink: idleFeed(), OutputSink: idleFeed() } }),
-
-  setTheme: (theme) => {
-    try {
-      localStorage.setItem("foundry-studio.theme", theme);
-    } catch {
-      /* not persisted */
-    }
-    set({ theme });
-  },
 
   toast: (t, ttl = 6000) => {
     const id = ++toastSeq;

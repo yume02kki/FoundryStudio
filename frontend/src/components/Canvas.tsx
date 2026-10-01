@@ -2,6 +2,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  MiniMap,
   ReactFlow,
   useReactFlow,
   type Connection,
@@ -41,24 +42,14 @@ export function Canvas() {
   const edges = useStudio((s) => s.edges);
   const loadId = useStudio((s) => s.loadId);
   const focus = useStudio((s) => s.focus);
-  const theme = useStudio((s) => s.theme);
-  const hasMeta = useStudio((s) => s.meta !== null);
-  const empty = hasMeta && !nodes.some((n) => n.data.spec.kind === "transformer");
   const onNodesChange = useStudio((s) => s.onNodesChange);
   const onEdgesChange = useStudio((s) => s.onEdgesChange);
   const flow = useReactFlow<PNode, PEdge>();
 
   useEffect(() => {
-    const t = setTimeout(() => flow.fitView({ padding: 0.12, maxZoom: 1.1, duration: 200 }), 60);
+    const t = setTimeout(() => flow.fitView({ padding: 0.25, duration: 200 }), 60);
     return () => clearTimeout(t);
   }, [loadId, flow]);
-
-  // The drawer under the canvas changes its height: keep the pipeline in view.
-  const drawer = useStudio((s) => `${s.issuesOpen}:${s.drawerTab}`);
-  useEffect(() => {
-    const t = setTimeout(() => flow.fitView({ padding: 0.12, maxZoom: 1.1, duration: 200 }), 80);
-    return () => clearTimeout(t);
-  }, [drawer, flow]);
 
   useEffect(() => {
     if (focus?.nodes.length) {
@@ -126,18 +117,13 @@ export function Canvas() {
         connectionRadius={28}
         minZoom={0.2}
         proOptions={{ hideAttribution: true }}
-        colorMode={theme}
+        colorMode="dark"
       >
-        <Background variant={BackgroundVariant.Dots} gap={18} size={1.4} color="var(--grid)" />
-        <Controls showInteractive={false} position="bottom-left" />
+        <Background id="minor" variant={BackgroundVariant.Lines} gap={20} color="#333" lineWidth={1} />
+        <Background id="major" variant={BackgroundVariant.Lines} gap={200} color="#444" lineWidth={1} />
+        <Controls showInteractive={false} />
+        <MiniMap pannable zoomable maskColor="rgba(20,20,20,0.6)" nodeColor="#666" style={{ width: 150, height: 90 }} />
       </ReactFlow>
-      {empty && (
-        <div className="canvas-hint">
-          <div className="canvas-hint-title">Add your first transformer</div>
-          Drag one from the library on the left, or press <b>+</b> on it. Then wire output ports to input ports: ports
-          with a matching schema light up while you drag.
-        </div>
-      )}
       <DragTooltip />
     </div>
   );

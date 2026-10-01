@@ -42,7 +42,7 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
           <div
             className="edge-label"
             data-testid={`topic-${id}`}
-            style={{ transform: `translate(-50%, 0) translate(${labelX}px, ${labelY + 14}px)` }}
+            style={{ transform: `translate(-50%, -100%) translate(${labelX}px, ${labelY - 8}px)` }}
             title="Internal dataset, generated from the graph (read-only)"
           >
             {topic.topic}

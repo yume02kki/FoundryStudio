@@ -129,7 +129,7 @@ Webhook deliveries trigger the same rescans as polling, which stays on as a safe
 
 ## Live data
 
-Open the **Live data** tab under the canvas and press **Start**. You'll see the Source (InputSink) and
+In the bottom panel, switch from **Project** to **Live data** and press **Start**. You'll see the Source (InputSink) and
 Output (OutputSink) topics side by side, so you can tell whether the pipeline is working:
 
 - **Flowing · N/min**: messages produced in the last minute. **Quiet**: connected, but nothing recent,
@@ -299,7 +299,7 @@ backend/foundry_studio/
   gitenv.py        git credential helper, glab stand-in
   demo.py          offline demo repos + CLI
 frontend/src/
-  components/      Canvas, PipelineNode, TopicEdge, Library, Inspector, TopBar, BottomPanel, LiveData, Dialogs
+  components/      Canvas, PipelineNode, TopicEdge, AssetBrowser, Inspector, TopBar, LiveData, Dialogs
   lib/             rules (wiring), versions, layout, feed health, schema colours
   store.ts         zustand store
 upstream/          merge requests for foundry and skywalker

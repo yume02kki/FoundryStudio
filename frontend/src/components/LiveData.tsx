@@ -86,6 +86,25 @@ export function useNow(intervalMs = 2000) {
   return now;
 }
 
+/** Small In/Out status dots on the "Live data" tab while feeds run. */
+export function LiveTabBadges() {
+  const feeds = useStudio((s) => s.feeds);
+  const now = useNow();
+  return (
+    <>
+      {SINKS.filter((s) => feeds[s].state !== "idle").map((s) => {
+        const h = feedHealth(feeds[s], now);
+        return (
+          <span key={s} className={`mini-status tone-${h.tone}`} title={`${s}: ${h.label} — ${h.detail}`}>
+            <span className="dot" />
+            {s === "InputSink" ? "In" : "Out"}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
 function pretty(m: FeedMessage): string {
   if (m.value === null) return "(empty)";
   if (m.encoding === "base64") return `(binary, base64) ${m.value}`;
