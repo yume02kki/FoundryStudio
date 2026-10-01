@@ -1,0 +1,3 @@
+[submodule "vendor/foundry"]
+	path = vendor/foundry
+	url = https://gitlab.com/yume02kki/foundry.git
