@@ -1,8 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ApiError, peek } from "../api";
 import { ago, feedHealth, messageTime } from "../lib/feedHealth";
 import { schemaColor } from "../lib/schemaColor";
-import { diffRecords, pairRecords, stageFeeds, stages, writerKey, type Pair } from "../lib/stages";
+import { diffRecords, liveKeys, pairRecords, stageFeeds, stageStats, stages, writerKey, type Pair, type StageStats } from "../lib/stages";
 import { useStudio } from "../store";
 import { SINK, SOURCE, type FeedMessage, type FeedState } from "../types";
 
@@ -44,29 +44,50 @@ function runFeed(key: string, signal: AbortSignal) {
   signal.addEventListener("abort", () => clearTimeout(retry));
 }
 
+const MAX_FEEDS = 8; // the backend serves at most 8 concurrent feeds
+
+/** The pipeline graph from the canvas, stable across renders while nodes/edges don't change. */
+function useGraph() {
+  const nodes = useStudio((s) => s.nodes);
+  const edges = useStudio((s) => s.edges);
+  return useMemo(
+    () => ({ nodes: nodes.map((n) => n.data.spec), edges: edges.map((e) => ({ source: e.source, target: e.target })) }),
+    [nodes, edges],
+  );
+}
+
+const graphOf = (s: ReturnType<typeof useStudio.getState>) => ({
+  nodes: s.nodes.map((n) => n.data.spec),
+  edges: s.edges.map((e) => ({ source: e.source, target: e.target })),
+});
+
 /**
- * Runs the feeds the selected Live data stage needs (its input topics and its output
- * topic) while Live data is on. Mounted once, in App. Graph edits restart the feeds
- * (debounced), since a topic or connection setting may have changed.
+ * While Live data is on, follows every topic of the pipeline (Source, each transformer's
+ * output, Output), so the canvas shows data flowing everywhere and switching between
+ * nodes is instant. Very large pipelines fall back to the selected stage's topics.
+ * Graph edits restart the feeds (debounced): a topic or a connection setting may have changed.
+ * Mounted once, in App.
  */
 export function useLiveFeeds() {
   const on = useStudio((s) => s.feedsOn && s.meta !== null);
-  const stage = useStudio((s) => s.liveStage);
   const revision = useStudio((s) => s.revision);
+  const stage = useStudio((s) => s.liveStage);
+  const all = useStudio((s) => liveKeys(graphOf(s)).join("|"));
+  const capped = all.split("|").length > MAX_FEEDS;
+  const keysSpec = capped ? `${all}#${stage}` : all;
+
   useEffect(() => {
     if (!on) {
       useStudio.setState({ feeds: {} });
       return;
     }
     const graph = useStudio.getState().graph();
-    const all = stages(graph);
-    if (!stage || !all.includes(stage)) {
-      // Default to the first transformer: the most useful before/after view.
-      useStudio.setState({ liveStage: all.length > 2 ? all[1] : SOURCE });
-      return;
+    let keys = keysSpec.split("#")[0].split("|").filter(Boolean);
+    if (keys.length > MAX_FEEDS) {
+      const st = useStudio.getState().liveStage;
+      const node = st?.startsWith("topic:") ? null : st;
+      keys = st?.startsWith("topic:") ? [st.slice(6)] : node ? (({ inputs, output }) => [...new Set([...inputs, output])])(stageFeeds(graph, node)) : [];
     }
-    const { inputs, output } = stageFeeds(graph, stage);
-    const keys = [...new Set([...inputs, output])];
     useStudio.setState({ feeds: Object.fromEntries(keys.map((k) => [k, { state: "connecting", messages: [], count: 0 } as FeedState])) });
     const ctrl = new AbortController();
     const start = setTimeout(() => keys.forEach((k) => runFeed(k, ctrl.signal)), 500);
@@ -74,7 +95,18 @@ export function useLiveFeeds() {
       clearTimeout(start);
       ctrl.abort();
     };
-  }, [on, stage, revision]);
+  }, [on, revision, keysSpec]);
+
+  // Clicking on the canvas drives what Live data shows: a node shows its data, a
+  // connection the topic it carries, empty canvas the overview.
+  const selectedNode = useStudio((s) => s.nodes.find((n) => n.selected)?.id ?? null);
+  const selectedEdge = useStudio((s) => s.edges.find((e) => e.selected)?.source ?? null);
+  useEffect(() => {
+    if (!useStudio.getState().feedsOn) return;
+    const s = useStudio.getState();
+    const liveStage = selectedNode ?? (selectedEdge ? `topic:${writerKey(graphOf(s), selectedEdge)}` : null);
+    useStudio.setState({ liveStage, bottomTab: "live" });
+  }, [selectedNode, selectedEdge]);
 }
 
 export function useNow(intervalMs = 2000) {
@@ -129,30 +161,42 @@ export function LiveTabBadges() {
   );
 }
 
-/** Activity line on a canvas node: the health of the topic it writes, while that feed runs. */
+/** Live numbers on a canvas node while Live data is on; click opens its data. */
 export function NodeActivity({ node }: { node: string }) {
-  const key = useStudio((s) =>
-    writerKey({ nodes: s.nodes.map((n) => n.data.spec), edges: s.edges.map((e) => ({ source: e.source, target: e.target })) }, node),
-  );
-  const feed = useStudio((s) => s.feeds[key]);
+  const on = useStudio((s) => s.feedsOn);
+  const feeds = useStudio((s) => s.feeds);
+  const graph = useGraph();
   const now = useNow();
-  if (!feed || feed.state === "idle") return null;
-  const h = feedHealth(feed, now);
+  if (!on) return null;
+  const st = stageStats(graph, node, feeds, now);
+  if (st.label === "Off") return null;
+  const label = st.label;
   return (
     <button
-      className={`activity tone-${h.tone} nodrag`}
+      className={`activity tone-${st.tone} nodrag`}
       data-testid={`activity-${node}`}
-      title={`${feed.topic ?? key}: ${h.label} — ${h.detail}`}
+      title={st.lastAt ? `last message ${ago(now - st.lastAt)}` : undefined}
       onClick={(e) => {
         e.stopPropagation();
         useStudio.setState({ bottomTab: "live", liveStage: node });
       }}
     >
       <span className="dot" />
-      {h.label}
-      {h.mismatches > 0 && <span className="activity-bad"> · {h.mismatches} bad</span>}
+      {label}
+      {st.dropped > 0 && <span className="activity-bad"> · {st.dropped} dropped</span>}
     </button>
   );
+}
+
+/** Is data flowing on the topic a connection carries? Drives the edge animation. */
+export function useEdgeFlow(source: string): { active: boolean; title: string } {
+  const key = useStudio((s) => writerKey(graphOf(s), source));
+  const feed = useStudio((s) => (s.feedsOn ? s.feeds[key] : undefined));
+  const now = useNow();
+  if (!feed) return { active: false, title: "" };
+  const h = feedHealth(feed, now);
+  const recent = h.lastAt !== null && now - h.lastAt < 15_000;
+  return { active: feed.state === "live" && recent, title: `${feed.topic ?? key}: ${h.label}, ${h.detail}` };
 }
 
 function pretty(m: FeedMessage | undefined): string {
@@ -201,19 +245,20 @@ function MessageRow({ m, now }: { m: FeedMessage; now: number }) {
   );
 }
 
-function TopicView({ stage, now }: { stage: string; now: number }) {
-  const feed = useStudio((s) => s.feeds[stage]);
+function TopicView({ feedKey, title, testId }: { feedKey: string; title: string; testId: string }) {
+  const feed = useStudio((s) => s.feeds[feedKey]);
+  const now = useNow();
   const h = feed ? feedHealth(feed, now) : null;
   return (
-    <section className="feed" data-testid={`feed-${stage}`}>
+    <section className="feed" data-testid={`feed-${testId}`}>
       <header className="feed-head">
         <div className="feed-title">
-          <span className="feed-kind">{stage === SOURCE ? "Source" : "Output"}</span>
+          <span className="feed-kind">{title}</span>
           <TopicLabel feed={feed} fallback="" />
           {feed?.demo && <span className="tag tag-warning">demo data</span>}
         </div>
         <div className="feed-status">
-          <StatusPill feed={feed} now={now} testId={`feed-status-${stage}`} />
+          <StatusPill feed={feed} now={now} testId={`feed-status-${testId}`} />
           {h && h.mismatches > 0 && <span className="tag tag-danger">{h.mismatches} don't match {feed?.schema}</span>}
           <span className="feed-detail">{h?.detail}</span>
         </div>
@@ -221,6 +266,7 @@ function TopicView({ stage, now }: { stage: string; now: number }) {
       <ul className="msgs">
         {feed?.messages.map((m) => <MessageRow key={`${m.partition}:${m.offset}`} m={m} now={now} />)}
         {feed?.state === "live" && feed.messages.length === 0 && <li className="empty">Waiting for messages…</li>}
+        {!feed && <li className="empty">Not watching this topic.</li>}
       </ul>
     </section>
   );
@@ -368,27 +414,80 @@ function TransformView({ stage, now }: { stage: string; now: number }) {
   );
 }
 
+// --------------------------------------------------------------------------- overview
+
+function overviewLabel(st: StageStats, sink: boolean): string {
+  if (sink || ["Off", "Error", "Connecting…"].includes(st.label)) return st.label;
+  if (st.tone === "danger") return "Not producing";
+  return st.inRate || st.outRate ? "Running" : "Idle";
+}
+
+function Overview({ order, now }: { order: string[]; now: number }) {
+  const feeds = useStudio((s) => s.feeds);
+  const graph = useGraph();
+  return (
+    <div className="overview" data-testid="live-overview">
+      <table>
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Reads</th>
+            <th>Writes</th>
+            <th>Status</th>
+            <th className="num">In/min</th>
+            <th className="num">Out/min</th>
+            <th className="num">Dropped</th>
+            <th>Last message</th>
+          </tr>
+        </thead>
+        <tbody>
+          {order.map((stage) => {
+            const st = stageStats(graph, stage, feeds, now);
+            const { inputs, output } = stageFeeds(graph, stage);
+            const topic = (k: string) => feeds[k]?.topic ?? k;
+            const sink = stage === SOURCE || stage === SINK;
+            return (
+              <tr key={stage} onClick={() => useStudio.setState({ liveStage: stage })} data-testid={`overview-${stage}`}>
+                <td className="ov-stage">
+                  {stage === SOURCE ? "Source" : stage === SINK ? "Output" : `⚙ ${stage}`}
+                </td>
+                <td className="mono muted">{sink ? (stage === SINK ? topic(output) : "") : inputs.map(topic).join(", ")}</td>
+                <td className="mono muted">{stage === SINK ? "" : topic(output)}</td>
+                <td>
+                  <span className={`status status-${st.tone}`}>
+                    <span className="dot" />
+                    {overviewLabel(st, sink)}
+                  </span>
+                </td>
+                <td className="num">{stage === SOURCE ? "" : st.inRate}</td>
+                <td className="num">{stage === SINK ? "" : st.outRate}</td>
+                <td className={`num${st.dropped ? " bad" : ""}`}>{sink ? "" : st.dropped}</td>
+                <td className="muted">{st.lastAt ? ago(now - st.lastAt) : "—"}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+      <p className="note">Click a stage here, or a node or connection on the canvas, to see its records.</p>
+    </div>
+  );
+}
+
 // --------------------------------------------------------------------------- the tab
 
 export function LiveData() {
   const on = useStudio((s) => s.feedsOn);
   const stage = useStudio((s) => s.liveStage);
-  const order = useStudio((s) => stages({ nodes: s.nodes.map((n) => n.data.spec), edges: s.edges.map((e) => ({ source: e.source, target: e.target })) }).join("|"));
-  const selected = useStudio((s) => s.nodes.find((n) => n.selected)?.id);
+  const order = useStudio((s) => stages(graphOf(s)).join("|")).split("|");
   const now = useNow();
-
-  // Selecting a node on the canvas shows its data.
-  useEffect(() => {
-    if (on && selected) useStudio.setState({ liveStage: selected });
-  }, [on, selected]);
 
   if (!on) {
     return (
       <div className="live-off-note">
         <p>
-          See the data at each step: what reaches the Source topic, what each transformer turns it into (its input
-          records next to its output records), and what leaves through the Output topic. Read-only: Studio never joins
-          the pipeline's consumer groups and never commits offsets.
+          Watch data move through the pipeline: what reaches the Source topic, what each transformer turns it into, and
+          what leaves through the Output topic. Read-only: Studio never joins the pipeline's consumer groups and never
+          commits offsets.
         </p>
         <button className="btn btn-primary" onClick={() => useStudio.setState({ feedsOn: true })} data-testid="feeds-start">
           Start live data
@@ -396,11 +495,19 @@ export function LiveData() {
       </div>
     );
   }
-  const list = order.split("|");
+  const topicKey = stage?.startsWith("topic:") ? stage.slice(6) : null;
   return (
     <div className="live">
       <nav className="stage-strip" aria-label="Pipeline stage">
-        {list.map((s, i) => (
+        <button
+          className={`stage${stage === null ? " active" : ""}`}
+          onClick={() => useStudio.setState({ liveStage: null })}
+          data-testid="stage-overview"
+        >
+          Overview
+        </button>
+        <span className="stage-sep" />
+        {order.map((s, i) => (
           <span key={s} className="stage-step">
             {i > 0 && <span className="stage-arrow">→</span>}
             <button
@@ -413,11 +520,15 @@ export function LiveData() {
           </span>
         ))}
       </nav>
-      {stage === SOURCE || stage === SINK ? (
-        <TopicView stage={stage} now={now} />
-      ) : stage ? (
+      {stage === null ? (
+        <Overview order={order} now={now} />
+      ) : topicKey ? (
+        <TopicView feedKey={topicKey} title="Topic" testId={`topic-${topicKey}`} />
+      ) : stage === SOURCE || stage === SINK ? (
+        <TopicView feedKey={stage} title={stage === SOURCE ? "Source" : "Output"} testId={stage} />
+      ) : (
         <TransformView stage={stage} now={now} />
-      ) : null}
+      )}
     </div>
   );
 }

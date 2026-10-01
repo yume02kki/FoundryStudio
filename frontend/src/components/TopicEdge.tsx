@@ -8,6 +8,7 @@ import {
 } from "@xyflow/react";
 import { checkConnection, emits, shortReason } from "../lib/rules";
 import { schemaColor } from "../lib/schemaColor";
+import { useEdgeFlow } from "./LiveData";
 import { issuesFor, useStudio, type PEdge, type PNode } from "../store";
 
 export function TopicEdge(props: EdgeProps<PEdge>) {
@@ -23,6 +24,8 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
   const focused = focus?.edges.includes(id);
   const stroke = errors.length ? "var(--error)" : color;
 
+  const flow = useEdgeFlow(source);
+
   return (
     <>
       <BaseEdge
@@ -31,6 +34,11 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
         markerEnd={`url(#arrow-${errors.length ? "error" : color.slice(1)})`}
         style={{ stroke, strokeWidth: selected || focused ? 3 : 2, opacity: focused || selected ? 1 : 0.85 }}
       />
+      {flow.active && !errors.length && (
+        <path d={path} className="edge-flow" style={{ stroke: color }} data-testid={`flow-${id}`}>
+          <title>{flow.title}</title>
+        </path>
+      )}
     </>
   );
 }

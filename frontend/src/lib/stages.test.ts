@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FeedMessage, GraphNode } from "../types";
-import { diffRecords, pairRecords, recordId, stageFeeds, stages, writerKey, type GraphLike } from "./stages";
+import type { FeedState } from "../types";
+import { diffRecords, liveKeys, pairRecords, recordId, stageFeeds, stageStats, stages, writerKey, type GraphLike } from "./stages";
 
 const t = (id: string): GraphNode => ({ id, kind: "transformer", transformer: {} });
 const graph: GraphLike = {
@@ -74,5 +75,28 @@ describe("diffRecords", () => {
     expect(d.unchanged).toEqual(["guid"]);
     expect(d.added).toEqual(["extra"]);
     expect(diffRecords("plain", "{}")).toBeNull();
+  });
+});
+
+describe("live overview", () => {
+  const feed = (messages: FeedMessage[]): FeedState => ({ state: "live", messages, count: messages.length });
+  it("watches one feed per topic", () => {
+    expect(liveKeys(graph)).toEqual(["InputSink", "XmlToJson", "OutputSink"]);
+  });
+
+  it("summarises a transformer's throughput and drops", () => {
+    const feeds = {
+      XmlToJson: feed([msg('{"guid":"a"}', 2), msg('{"guid":"b"}', 20), msg('{"guid":"c"}', 30)]),
+      OutputSink: feed([msg('{"guid":"a"}', 1), msg('{"guid":"c"}', 29)]),
+    };
+    const s = stageStats(graph, "Base64Decoder", feeds, NOW);
+    expect(s).toMatchObject({ inRate: 3, outRate: 2, transformed: 2, dropped: 1, tone: "warning", label: "3 in → 2 out/min" });
+    expect(stageStats(graph, "OutputSink", feeds, NOW)).toMatchObject({ inRate: 2, tone: "success" });
+  });
+
+  it("flags a transformer that receives but produces nothing", () => {
+    const feeds = { XmlToJson: feed([msg('{"guid":"a"}', 2)]), OutputSink: feed([]) };
+    expect(stageStats(graph, "Base64Decoder", feeds, NOW).tone).toBe("danger");
+    expect(stageStats(graph, "Base64Decoder", {}, NOW).label).toBe("Off");
   });
 });

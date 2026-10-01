@@ -75,6 +75,21 @@ function ValidationChip() {
   );
 }
 
+/** Turns Live data on for the whole pipeline: the canvas animates, nodes show live numbers. */
+function LiveToggle() {
+  const on = useStudio((s) => s.feedsOn);
+  return (
+    <button
+      className={`chip live-toggle${on ? " on" : ""}`}
+      onClick={() => useStudio.setState(on ? { feedsOn: false } : { feedsOn: true, bottomTab: "live", liveStage: null })}
+      title={on ? "Stop watching the pipeline's topics" : "Watch data flow through the pipeline (read-only)"}
+      data-testid="live-toggle"
+    >
+      <span className="dot" /> {on ? "Live data on" : "Live data"}
+    </button>
+  );
+}
+
 function MrChip() {
   const mr = useStudio((s) => s.mr);
   if (!mr) return <div className="chip chip-muted">no merge requests</div>;
@@ -174,6 +189,7 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
         <span className={`dot ${live ? "dot-live" : ""}`} /> {live ? watcher?.mode ?? "live" : "offline"}
         {health?.mode === "demo" ? " · demo" : ""}
       </div>
+      <LiveToggle />
       <MrChip />
       <button className="btn" onClick={save} disabled={!meta?.name || busy !== null} data-testid="save">
         {busy === "save" ? "Saving…" : "Save"}

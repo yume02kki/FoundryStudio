@@ -1,8 +1,8 @@
 // Live data stages: what each node reads and writes, and pairing a transformer's input
 // records with its output records.
 
-import { SINK, SOURCE, type FeedMessage, type GraphEdge, type GraphNode } from "../types";
-import { messageTime } from "./feedHealth";
+import { SINK, SOURCE, type FeedMessage, type FeedState, type GraphEdge, type GraphNode } from "../types";
+import { feedHealth, messageTime } from "./feedHealth";
 
 export interface GraphLike {
   nodes: GraphNode[];
@@ -45,6 +45,53 @@ export function stageFeeds(graph: GraphLike, stage: string): { inputs: string[];
   if (stage === SOURCE || stage === SINK) return { inputs: [], output: stage };
   const inputs = [...new Set(graph.edges.filter((e) => e.target === stage).map((e) => writerKey(graph, e.source)))];
   return { inputs, output: writerKey(graph, stage) };
+}
+
+/** Every topic the pipeline touches, as feed keys (one per topic). */
+export function liveKeys(graph: GraphLike): string[] {
+  return [...new Set(stages(graph).map((s) => writerKey(graph, s)))];
+}
+
+export interface StageStats {
+  inRate: number; // messages/min on what the stage reads (for a sink: its topic)
+  outRate: number; // messages/min on what it writes
+  transformed: number;
+  dropped: number;
+  lastAt: number | null;
+  tone: "success" | "warning" | "danger" | "muted";
+  label: string;
+}
+
+/** Live numbers for one stage, for the overview, the nodes and the edges. */
+export function stageStats(graph: GraphLike, stage: string, feeds: Record<string, FeedState>, now: number): StageStats {
+  const { inputs, output } = stageFeeds(graph, stage);
+  const outFeed = feeds[output];
+  const out = outFeed ? feedHealth(outFeed, now) : null;
+  if (stage === SOURCE || stage === SINK) {
+    return {
+      inRate: out?.perMinute ?? 0, outRate: out?.perMinute ?? 0, transformed: 0, dropped: 0,
+      lastAt: out?.lastAt ?? null, tone: out?.tone ?? "muted", label: out?.label ?? "Off",
+    };
+  }
+  const inFeeds = inputs.map((k) => feeds[k]).filter(Boolean) as FeedState[];
+  const inRate = inFeeds.reduce((n, f) => n + feedHealth(f, now).perMinute, 0);
+  const pairs = pairRecords(inFeeds.flatMap((f) => f.messages), outFeed?.messages ?? [], now);
+  const dropped = pairs.filter((p) => p.status === "dropped").length;
+  const transformed = pairs.filter((p) => p.status === "transformed").length;
+  const outRate = out?.perMinute ?? 0;
+  const lastAt = out?.lastAt ?? null;
+  const states = [...inFeeds, outFeed].filter(Boolean).map((f) => f!.state);
+  let tone: StageStats["tone"] = "muted";
+  let label = `${inRate} in → ${outRate} out/min`;
+  if (states.length === 0 || states.every((st) => st === "idle")) label = "Off";
+  else if (states.includes("error")) {
+    tone = "danger";
+    label = "Error";
+  } else if (states.includes("connecting") && !states.includes("live")) label = "Connecting…";
+  else if (inRate > 0 && outRate === 0) tone = "danger"; // input arriving, nothing coming out
+  else if (dropped > 0) tone = "warning";
+  else if (outRate > 0) tone = "success";
+  return { inRate, outRate, transformed, dropped, lastAt, tone, label };
 }
 
 const JSON_ID = /"(?:guid|id|uuid)"\s*:\s*"([^"]+)"/;

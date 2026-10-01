@@ -130,9 +130,16 @@ Webhook deliveries trigger the same rescans as polling, which stays on as a safe
 
 ## Live data
 
-In the bottom panel, switch from **Project** to **Live data** and press **Start**. A strip of stages
-(Source → each transformer → Output) picks what you look at; clicking a node on the canvas selects
-its stage too.
+Press **Live data** in the top bar. Studio follows every topic of the pipeline (the Source, each
+transformer's output and the Output) and the canvas comes alive:
+
+- connections animate while data flows through the topic they carry;
+- each transformer shows `N in → M out/min` and how many records it dropped; the sinks show their rate;
+- the **Overview** in the bottom panel lists every stage with its status, rates, drops and last
+  message. A transformer that receives input but produces nothing is flagged **Not producing**.
+
+Then click to drill in. A **node** shows its data, a **connection** shows the messages on its topic,
+and **empty canvas** goes back to the Overview. The stage strip above the panel does the same.
 
 - **A transformer** shows its input records next to its output records. They're matched by record
   key: the Kafka key, which foundry-schemas sets to the packet `guid`, or else a `guid`/`id` field in
