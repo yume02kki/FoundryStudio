@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TransformerInfo, Version } from "../types";
-import { compareSemver, findInfo, updateFor } from "./versions";
+import { compareSemver, findInfo, updateFor, versionFor } from "./versions";
 
 const v = (ref: string, label: string, kind: "tag" | "branch", commit: string): Version => ({
   ref,
@@ -51,6 +51,14 @@ describe("versions", () => {
   it("flags a pinned commit that isn't the newest", () => {
     const i = info([v("Base64Decoder/v0.4.2", "v0.4.2", "tag", "a"), v("c".repeat(40), "main@cccc", "branch", "c".repeat(40))]);
     expect(updateFor(i, "c".repeat(40))?.ref).toBe("Base64Decoder/v0.4.2");
+  });
+
+  it("treats a missing Ref as the default branch, which is always the latest", () => {
+    const head = v("c".repeat(40), "main@cccc", "branch", "c".repeat(40));
+    const i = info([v("Base64Decoder/v0.4.3", "v0.4.3", "tag", "b"), head]);
+    expect(versionFor(i, undefined)).toBe(head);
+    expect(versionFor(i, "HEAD")).toBe(head);
+    expect(updateFor(i, undefined)).toBeUndefined();
   });
 
   it("matches nodes to discovered transformers by repo and path", () => {

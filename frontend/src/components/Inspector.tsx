@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { emits } from "../lib/rules";
 import { writerKey } from "../lib/stages";
 import { schemaColor } from "../lib/schemaColor";
-import { findInfo, versionFor } from "../lib/versions";
+import { findInfo, headVersion, versionFor } from "../lib/versions";
 import { issuesFor, NAME_RE, useStudio } from "../store";
 import { SINK, SOURCE, type ConnectionSettings, type GraphNode, type Issue } from "../types";
 
@@ -231,20 +231,33 @@ function TransformerInspector({ node }: { node: GraphNode }) {
             value={spec.Ref ?? ""}
             data-testid="inspector-ref"
             onChange={(e) => {
-              const v = info.versions.find((x) => x.ref === e.target.value);
-              updateSpec(node.id, (n) => ({
-                ...n,
-                transformer: { ...n.transformer, Ref: e.target.value, IN: v?.input ?? n.transformer?.IN, OUT: v?.output ?? n.transformer?.OUT },
-              }));
+              const ref = e.target.value;
+              const v = ref ? info.versions.find((x) => x.ref === ref) : headVersion(info);
+              updateSpec(node.id, (n) => {
+                const { Ref: _old, ...rest } = n.transformer ?? {};
+                return {
+                  ...n,
+                  transformer: { ...rest, ...(ref ? { Ref: ref } : {}), IN: v?.input ?? rest.IN, OUT: v?.output ?? rest.OUT },
+                };
+              });
             }}
           >
+            <option value="">Default branch (latest)</option>
             {!version && spec.Ref && <option value={spec.Ref}>{spec.Ref} (not found)</option>}
-            {info.versions.map((v) => (
-              <option key={v.ref} value={v.ref}>
-                {v.label}
-                {v.ref === info.latest ? " (latest)" : ""}
-              </option>
-            ))}
+            {info.versions
+              .filter((v) => v.kind === "tag")
+              .map((v) => (
+                <option key={v.ref} value={v.ref}>
+                  {v.label}
+                </option>
+              ))}
+            {info.versions
+              .filter((v) => v.kind === "branch")
+              .map((v) => (
+                <option key={v.ref} value={v.ref}>
+                  {v.label} (pinned commit)
+                </option>
+              ))}
           </select>
         ) : (
           <input value={spec.Ref ?? ""} readOnly />

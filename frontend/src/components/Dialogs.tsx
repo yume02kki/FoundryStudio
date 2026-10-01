@@ -33,10 +33,25 @@ export function VersionPicker() {
   return (
     <Modal title={`${nodeId} — pick a version`} onClose={close}>
       <div className="versions" data-testid="version-picker">
+        <button
+          className={`version${!spec?.Ref ? " current" : ""}`}
+          onClick={() => {
+            const head = info?.versions.find((v) => v.kind === "branch");
+            updateSpec(nodeId, (n) => {
+              const { Ref: _old, ...rest } = n.transformer ?? {};
+              return { ...n, transformer: { ...rest, IN: head?.input ?? rest.IN, OUT: head?.output ?? rest.OUT } };
+            });
+            close();
+          }}
+        >
+          <span className="version-label">Default branch</span>
+          <span className="version-types muted">no Ref: always the latest commit, pinned in the lock file at deploy</span>
+          {!spec?.Ref && <span className="badge badge-muted">current</span>}
+        </button>
         {info?.versions.map((v) => (
           <button
             key={v.ref}
-            className={`version${v.ref === current?.ref ? " current" : ""}`}
+            className={`version${spec?.Ref && v.ref === current?.ref ? " current" : ""}`}
             onClick={() => {
               updateSpec(nodeId, (n) => ({
                 ...n,
@@ -58,7 +73,7 @@ export function VersionPicker() {
                 ⚠
               </span>
             )}
-            {v.ref === current?.ref && <span className="badge badge-muted">current</span>}
+            {spec?.Ref && v.ref === current?.ref && <span className="badge badge-muted">current</span>}
           </button>
         ))}
       </div>

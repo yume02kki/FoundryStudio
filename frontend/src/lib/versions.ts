@@ -36,8 +36,14 @@ export function findInfo(spec: TransformerSpec | undefined, infos: Iterable<Tran
   return undefined;
 }
 
+/** The default-branch version: what a transformer without a Ref runs (foundry: no Ref = HEAD). */
+export function headVersion(info: TransformerInfo | undefined): Version | undefined {
+  return info?.versions.find((v) => v.kind === "branch");
+}
+
 export function versionFor(info: TransformerInfo | undefined, ref: string | undefined): Version | undefined {
-  if (!info || !ref) return undefined;
+  if (!info) return undefined;
+  if (!ref || ref === "HEAD") return headVersion(info);
   return info.versions.find((v) => v.ref === ref) ?? info.versions.find((v) => v.commit.startsWith(ref));
 }
 
@@ -47,7 +53,8 @@ export function versionFor(info: TransformerInfo | undefined, ref: string | unde
  * different commit.
  */
 export function updateFor(info: TransformerInfo | undefined, ref: string | undefined): Version | undefined {
-  if (!info || !ref || info.versions.length === 0) return undefined;
+  // No Ref follows the default branch, so it's always on the latest.
+  if (!info || !ref || ref === "HEAD" || info.versions.length === 0) return undefined;
   const newest = info.versions[0];
   const current = versionFor(info, ref);
   if (current?.kind === "tag" || (!current && SEMVER.test(ref))) {

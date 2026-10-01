@@ -16,11 +16,9 @@ test("AC2: SWpipeline rebuilt from scratch is byte-identical and deploys as alre
   await page.getByTestId("pipeline-name").fill("SWpipeline");
 
   const box = (await page.getByTestId("canvas").boundingBox())!;
-  // Cards add the latest version (another test may have tagged v0.4.3); pin v0.4.2 on the node.
+  // Cards add transformers without a Ref (default branch), like the deployed manifest.
   await dropCard(page, "XmlToJson", box.width * 0.35, box.height / 2 + 120);
-  await page.getByTestId("inspector-ref").selectOption("XmlToJson/v0.4.2");
   await dropCard(page, "Base64Decoder", box.width * 0.62, box.height / 2 + 120);
-  await page.getByTestId("inspector-ref").selectOption("Base64Decoder/v0.4.2");
 
   await page.getByTestId("node-InputSink").click();
   await fillSink(page, "source", {

@@ -42,11 +42,11 @@ def scratch_graph(foundry, node_order=None, edge_order=None, shuffle_keys=False)
             }),
         })},
         "Base64Decoder": {"id": "Base64Decoder", "kind": "transformer", "transformer": keys({
-            "Repo": SKYWALKER_URL, "Path": "Base64Decoder", "Ref": "Base64Decoder/v0.4.2",
+            "Repo": SKYWALKER_URL, "Path": "Base64Decoder",  # no Ref: the default branch (foundry's example)
             "IN": "EncodedPackets", "OUT": "Packets",
         })},
         "XmlToJson": {"id": "XmlToJson", "kind": "transformer", "transformer": keys({
-            "Repo": SKYWALKER_URL, "Path": "XmlToJson", "Ref": "XmlToJson/v0.4.2",
+            "Repo": SKYWALKER_URL, "Path": "XmlToJson",
             "IN": "XmlPackets", "OUT": "EncodedPackets",
         })},
     }

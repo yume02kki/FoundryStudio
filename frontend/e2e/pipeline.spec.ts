@@ -80,6 +80,9 @@ test("AC3: wiring InputSink -> XmlToJson -> OutputSink is refused with deploy.py
 test("clicking a connection shows and edits its Kafka connection settings", async ({ page }) => {
   await page.goto("/?pipeline=SWpipeline&source=deployed");
   await expect(page.getByTestId("node-XmlToJson")).toBeVisible();
+  // Let the canvas finish its fit-to-view animation, or a click can land beside the edge.
+  await expect(page.getByTestId("validation-status")).toContainText("valid");
+  await page.waitForTimeout(400);
   const inspector = page.getByTestId("inspector");
 
   // Source -> transformer: the InputSink's own settings.

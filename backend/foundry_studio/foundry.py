@@ -92,7 +92,9 @@ class Foundry:
     @cached_property
     def rust_schema_names(self) -> dict[str, str]:
         """Rust type -> Schema::NAME, from foundry-schemas (e.g. XmlPacket -> XmlPackets)."""
-        src = (self.root / "sdk" / "foundry-schemas" / "src" / "lib.rs").read_text()
+        candidates = [self.root / "sdk" / "rust" / "foundry-schemas" / "src" / "lib.rs",  # foundry >= sdk/rust move
+                      self.root / "sdk" / "foundry-schemas" / "src" / "lib.rs"]
+        src = next((p for p in candidates if p.is_file()), candidates[0]).read_text()
         return {m.group(1): m.group(2) for m in _SCHEMA_IMPL_RE.finditer(src)}
 
     @cached_property

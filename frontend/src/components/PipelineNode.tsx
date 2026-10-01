@@ -57,7 +57,9 @@ function PipelineNodeView({ id, data, selected }: NodeProps<PNode>) {
   const title = spec.kind === "source" ? "Source" : spec.kind === "output" ? "Output" : "Transformer";
   const subtitle =
     spec.kind === "transformer"
-      ? version?.label ?? spec.transformer?.Ref ?? "no version"
+      ? spec.transformer?.Ref
+        ? version?.label ?? spec.transformer.Ref
+        : "latest (default branch)"
       : [spec.sink?.Type ?? "Kafka", spec.sink?.Topic].filter(Boolean).join(" · ");
 
   return (

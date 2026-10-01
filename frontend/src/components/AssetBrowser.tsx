@@ -74,12 +74,12 @@ function SchemaChip({ schema }: { schema: string | null }) {
 
 function Card({ t, favorite, onFavorite }: { t: TransformerInfo; favorite: boolean; onFavorite: () => void }) {
   const changed = useStudio((s) => s.changed[t.id]);
-  // Cards always add the latest version; a node's version is changed on the canvas.
-  const version = t.versions.find((v) => v.ref === t.latest) ?? t.versions[0];
+  // Cards add the transformer without a Ref (its default branch); pin a version on the node.
+  const version = t.versions.find((v) => v.kind === "branch") ?? t.versions[0];
   const fresh = changed && Date.now() - changed.at < 15000;
 
   const onDragStart = (e: DragEvent) => {
-    e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ id: t.id, ref: version.ref }));
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ id: t.id, ref: "" })); // no Ref: default branch
     e.dataTransfer.effectAllowed = "copy";
   };
 

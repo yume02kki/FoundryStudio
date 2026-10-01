@@ -214,14 +214,16 @@ export const useStudio = create<State>()((set, get) => ({
     const taken = new Set(get().nodes.map((n) => n.id));
     let id = info.name.replace(/[^A-Za-z0-9._-]/g, "") || "Transformer";
     for (let i = 2; taken.has(id) || id === SOURCE || id === SINK; i++) id = `${info.name}${i}`;
-    const version = info.versions.find((v) => v.ref === ref) ?? info.versions[0];
+    // No Ref unless a version was asked for: the transformer follows its default branch
+    // (foundry: a missing Ref means HEAD; the lock file pins the commit at deploy time).
+    const version = ref ? info.versions.find((v) => v.ref === ref) : info.versions.find((v) => v.kind === "branch");
     const spec: GraphNode = {
       id,
       kind: "transformer",
       transformer: {
         Repo: info.repo,
         ...(info.path ? { Path: info.path } : {}),
-        Ref: version?.ref ?? ref,
+        ...(ref ? { Ref: ref } : {}),
         IN: version?.input ?? info.input ?? undefined,
         OUT: version?.output ?? info.output ?? undefined,
       },

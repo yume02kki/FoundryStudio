@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import ipaddress
 import json
 import logging
 import math
 import random
+import re
 import threading
 import time
 import uuid
@@ -27,6 +29,8 @@ import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
+
+import yaml
 
 HISTORY = 20  # recent messages to show when a feed opens
 PREVIEW_BYTES = 4096
@@ -97,17 +101,65 @@ def client_config(settings: dict, secrets_dir: Path) -> dict:
     return cfg
 
 
+_RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$")
+_BASE64 = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
+
+
+def _field_error(kind: str, value) -> str | None:
+    """foundry's field types (schemas/*.yaml): uuid, string, base64, datetime, ip."""
+    if kind == "string":
+        return None if isinstance(value, str) else "expected a string"
+    if not isinstance(value, str):
+        return f"expected {kind} text"
+    if kind == "uuid":
+        try:
+            uuid.UUID(value)
+            return None if len(value) == 36 else "not a UUID"
+        except ValueError:
+            return "not a UUID"
+    if kind == "base64":
+        return None if len(value) % 4 == 0 and _BASE64.match(value) else "not base64"
+    if kind == "datetime":
+        if not _RFC3339.match(value):
+            return "not an RFC 3339 date-time"
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
+            return None
+        except ValueError:
+            return "not an RFC 3339 date-time"
+    if kind == "ip":
+        try:
+            ipaddress.ip_address(value)
+            return None
+        except ValueError:
+            return "not an IP address"
+    return None  # a type this Studio doesn't know: don't flag it
+
+
 class FormatChecker:
-    """Does a message match the sink's Ontology? JSON Schema files are validated; XSDs get a
-    well-formedness check (full XSD validation would need lxml)."""
+    """Does a message match its topic's schema?
+
+    foundry's schemas (`format: json|xml` + `fields: {name: type}`) are checked field by
+    field, as the SDKs decode them: exactly those fields, each of its type. Older
+    pipelines' JSON Schema files are validated with jsonschema; XSDs get a well-formedness check.
+    """
 
     def __init__(self, schema: str | None, filename: str | None, data: bytes | None):
         self.schema = schema
         self.kind = None
         self.validator = None
+        self.fields: dict[str, str] = {}
         if not filename or data is None:
             return
-        if filename.endswith(".json"):
+        if filename.endswith((".yaml", ".yml")):
+            try:
+                spec = yaml.safe_load(data) or {}
+            except yaml.YAMLError:
+                return
+            if isinstance(spec, dict) and spec.get("format") in ("json", "xml") and isinstance(spec.get("fields"), dict):
+                self.kind = f"fields-{spec['format']}"
+                self.fields = {str(k): str(v) for k, v in spec["fields"].items()}
+        elif filename.endswith(".json"):
             import jsonschema
 
             try:
@@ -120,9 +172,35 @@ class FormatChecker:
         elif filename.endswith(".xsd"):
             self.kind = "xml"
 
+    def _check_fields(self, doc: dict) -> dict:
+        missing = sorted(set(self.fields) - set(doc))
+        extra = sorted(set(doc) - set(self.fields))
+        if missing:
+            return {"ok": False, "detail": f"doesn't match {self.schema}: missing field(s) {', '.join(missing)}"}
+        if extra:
+            return {"ok": False, "detail": f"doesn't match {self.schema}: unknown field(s) {', '.join(extra)}"}
+        for name, kind in self.fields.items():
+            if err := _field_error(kind, doc[name]):
+                return {"ok": False, "detail": f"doesn't match {self.schema}: {name}: {err}"}
+        return {"ok": True, "detail": f"matches {self.schema}"}
+
     def check(self, value: bytes | None) -> dict:
         if value is None:
             return {"ok": False, "detail": "empty message (tombstone)"}
+        if self.kind == "fields-json":
+            try:
+                doc = json.loads(value)
+            except ValueError as e:
+                return {"ok": False, "detail": f"not JSON: {e}"}
+            if not isinstance(doc, dict):
+                return {"ok": False, "detail": f"doesn't match {self.schema}: expected a JSON object"}
+            return self._check_fields(doc)
+        if self.kind == "fields-xml":
+            try:
+                root = ET.fromstring(value)
+            except ET.ParseError as e:
+                return {"ok": False, "detail": f"not well-formed XML: {e}"}
+            return self._check_fields({child.tag: (child.text or "") for child in root})
         if self.kind == "json":
             try:
                 doc = json.loads(value)

@@ -84,20 +84,38 @@ def test_bind_uses_this_environments_cluster(tmp_path):
 
 
 def test_format_checks():
-    packets = FormatChecker("Packets", "schemas/packets.schema.json", (SCHEMAS / "packets.schema.json").read_bytes())
+    """foundry's YAML schemas (format + fields), checked field by field like the SDKs decode them."""
+    packets = FormatChecker("Packets", "schemas/packets.yaml", (SCHEMAS / "packets.yaml").read_bytes())
     assert packets.check(json.dumps(PACKET).encode()) == {"ok": True, "detail": "matches Packets"}
-    bad = packets.check(json.dumps({**PACKET, "extra": 1}).encode())
-    assert not bad["ok"] and "doesn't match Packets" in bad["detail"]
+    assert "unknown field(s) extra" in packets.check(json.dumps({**PACKET, "extra": 1}).encode())["detail"]
+    assert "missing field(s) guid" in packets.check(json.dumps({k: v for k, v in PACKET.items() if k != "guid"}).encode())["detail"]
+    assert "host_ip: not an IP address" in packets.check(json.dumps({**PACKET, "host_ip": "10.0.4.300"}).encode())["detail"]
+    assert "time_sent: not an RFC 3339" in packets.check(json.dumps({**PACKET, "time_sent": "yesterday"}).encode())["detail"]
     assert not packets.check(b"<packet/>")["ok"]
-    xml = FormatChecker("XmlPackets", "schemas/xml_packets.xsd", (SCHEMAS / "xml_packets.xsd").read_bytes())
-    assert xml.check(XML)["ok"] and not xml.check(b"<packet>")["ok"]
+
+    encoded = FormatChecker("EncodedPackets", "schemas/encoded_packets.yaml", (SCHEMAS / "encoded_packets.yaml").read_bytes())
+    assert "data: not base64" in encoded.check(json.dumps(PACKET).encode())["detail"]  # "Hello, world!" isn't base64
+
+    xml = FormatChecker("XmlPackets", "schemas/xml_packets.yaml", (SCHEMAS / "xml_packets.yaml").read_bytes())
+    assert xml.check(XML) == {"ok": True, "detail": "matches XmlPackets"}
+    assert not xml.check(b"<packet>")["ok"]
+    assert "guid: not a UUID" in xml.check(XML.replace(b"3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17", b"nope"))["detail"]
     assert FormatChecker(None, None, None).check(b"x")["ok"] is None
+
+
+def test_legacy_schema_files_still_work():
+    """Pipelines deployed before foundry's YAML schemas carry JSON Schema / XSD files."""
+    spec = json.dumps({"type": "object", "required": ["guid"], "additionalProperties": False,
+                       "properties": {"guid": {"type": "string"}}}).encode()
+    legacy = FormatChecker("Packets", "schemas/packets.schema.json", spec)
+    assert legacy.check(b'{"guid": "x"}')["ok"] and not legacy.check(b'{"guid": "x", "y": 1}')["ok"]
+    assert FormatChecker("XmlPackets", "schemas/xml_packets.xsd", b"<xs:schema/>").check(XML)["ok"]
 
 
 @pytest.mark.anyio
 async def test_demo_feed_matches_its_schemas():
-    for schema, file in (("XmlPackets", "xml_packets.xsd"), ("EncodedPackets", "encoded_packets.schema.json"),
-                         ("Packets", "packets.schema.json")):
+    for schema, file in (("XmlPackets", "xml_packets.yaml"), ("EncodedPackets", "encoded_packets.yaml"),
+                         ("Packets", "packets.yaml")):
         checker = FormatChecker(schema, file, (SCHEMAS / file).read_bytes())
         stop = asyncio.Event()
         events = []

@@ -10,7 +10,7 @@ committed and pushed shows up (or shows an update) without a reload.
 - **Backend:** Python + FastAPI (`backend/`). It imports foundry's `deploy.py` as a library, so the
   UI and the CLI can't disagree about what a valid pipeline is.
 - **Frontend:** React + TypeScript + Vite, with React Flow (`@xyflow/react`) for the canvas (`frontend/`).
-- **foundry** is pinned as a git submodule at `vendor/foundry` (commit `982b6c3`).
+- **foundry** is pinned as a git submodule at `vendor/foundry` (commit `b126193`, foundry `main`).
 
 ## Quick start
 
@@ -153,7 +153,9 @@ and **empty canvas** goes back to the Overview. The stage strip above the panel 
   It keeps retrying, so it recovers by itself. Each node on the canvas shows the status of the topic
   it writes.
 - Every message is checked against its topic's schema: the sink's Ontology, or the transformer's
-  `OUT` for internal topics. JSON schemas are fully validated; XSDs get a well-formedness check.
+  `OUT` for internal topics, field by field as foundry's YAML schemas define (`format` + `fields`,
+  e.g. `guid: uuid`, `data: base64`): exactly those fields, each of its type. Older pipelines' JSON
+  Schema files are validated too; XSDs get a well-formedness check.
 
 A transformer's input and output topics come from deploy.py's `endpoint_id`. Internal topics
 (`<Pipeline>.<Transformer>.out`) use `Defaults.InternalDatasets.ConnectionSettings`; the sinks use
@@ -254,8 +256,12 @@ Until a crate has one, Studio parses `type In = X;` / `type Out = Y;` in `src/ma
 `src/lib.rs`) and maps the Rust type to its schema name through `impl Schema for … { const NAME }`
 in the pinned foundry-schemas. Transformers found this way carry a **⚠ inferred** badge.
 
-A canvas node is matched to its discovered transformer by `Repo` + `Path`. When a newer version
-exists, the node shows an update badge. Click it to open the version picker.
+A transformer's `Ref` is optional (foundry: no `Ref` means the repo's default branch; the lock
+file pins the commit at deploy). Dragging a card adds it without a `Ref`. To pin a tag or a commit,
+use the node's Version in the Inspector, which also offers "Default branch (latest)" to unpin.
+
+A canvas node is matched to its discovered transformer by `Repo` + `Path`. When a node is pinned and
+a newer version exists, it shows an update badge. Click it to open the version picker.
 
 ## Changes proposed upstream
 
@@ -329,5 +335,5 @@ frontend/src/
   lib/             rules (wiring), versions, layout, feed health, stages/pairing/diff, schema colours
   store.ts         zustand store
 upstream/          merge requests for foundry and skywalker
-vendor/foundry     foundry @ 982b6c3 (submodule)
+vendor/foundry     foundry @ b126193 (submodule)
 ```
