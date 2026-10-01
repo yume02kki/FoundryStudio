@@ -1489,3 +1489,17 @@ button.tab:hover:not(.active) {
   padding: 6px;
   border-radius: 3px;
 }
+
+/* project tree: repos, grouping folders, transformers */
+.tree-icon {
+  display: inline-block;
+  width: 18px;
+}
+
+.tree-repo {
+  font-weight: 600;
+}
+
+.tree-transformer .tree-icon {
+  color: #8ab4f8;
+}

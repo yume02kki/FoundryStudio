@@ -24,26 +24,41 @@ function saveFavorites(ids: string[]) {
   }
 }
 
-interface Folder {
-  key: string; // "<project>:<path>"
+interface TreeEntry {
+  key: string; // "<project>:<path>", the filter the entry selects
   project: string;
   path: string;
   label: string;
   depth: number;
+  kind: "repo" | "folder" | "transformer";
+  title: string;
 }
 
-function folders(projects: string[], transformers: TransformerInfo[]): Folder[] {
-  const out: Folder[] = [];
+/**
+ * The tree shows transformers, not raw git directories: a repo, the folders that only
+ * group transformers, and each transformer (a crate directory) under its own name.
+ */
+function treeEntries(projects: string[], transformers: TransformerInfo[]): TreeEntry[] {
+  const out: TreeEntry[] = [];
   for (const project of projects) {
-    out.push({ key: `${project}:`, project, path: "", label: project, depth: 0 });
-    const paths = new Set<string>();
-    for (const t of transformers.filter((t) => t.project === project)) {
+    out.push({ key: `${project}:`, project, path: "", label: project.split("/").pop() ?? project, depth: 0, kind: "repo", title: project });
+    const mine = transformers.filter((t) => t.project === project);
+    const crates = new Map(mine.map((t) => [t.path, t]));
+    const groups = new Set<string>();
+    for (const t of mine) {
       const parts = t.path.split("/").filter(Boolean);
-      for (let i = 1; i <= parts.length; i++) paths.add(parts.slice(0, i).join("/"));
+      for (let i = 1; i < parts.length; i++) groups.add(parts.slice(0, i).join("/"));
     }
-    for (const path of [...paths].sort()) {
-      const parts = path.split("/");
-      out.push({ key: `${project}:${path}`, project, path, label: parts[parts.length - 1], depth: parts.length });
+    const paths = [...new Set([...groups, ...crates.keys()])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: "base" }));
+    for (const path of paths) {
+      const t = crates.get(path);
+      const depth = path ? path.split("/").length : 1;
+      out.push(
+        t
+          ? { key: `${project}:${path}`, project, path, label: t.name, depth, kind: "transformer",
+              title: `${t.input ?? "?"} → ${t.output ?? "?"}${t.description ? `\n${t.description}` : ""}` }
+          : { key: `${project}:${path}`, project, path, label: path.split("/").pop()!, depth, kind: "folder", title: path },
+      );
     }
   }
   return out;
@@ -59,9 +74,8 @@ function SchemaChip({ schema }: { schema: string | null }) {
 
 function Card({ t, favorite, onFavorite }: { t: TransformerInfo; favorite: boolean; onFavorite: () => void }) {
   const changed = useStudio((s) => s.changed[t.id]);
-  const [ref, setRef] = useState(t.latest);
-  useEffect(() => setRef(t.latest), [t.latest]);
-  const version = t.versions.find((v) => v.ref === ref) ?? t.versions[0];
+  // Cards always add the latest version; a node's version is changed on the canvas.
+  const version = t.versions.find((v) => v.ref === t.latest) ?? t.versions[0];
   const fresh = changed && Date.now() - changed.at < 15000;
 
   const onDragStart = (e: DragEvent) => {
@@ -88,20 +102,6 @@ function Card({ t, favorite, onFavorite }: { t: TransformerInfo; favorite: boole
         <SchemaChip schema={version.input} /> <span className="arrow">→</span> <SchemaChip schema={version.output} />
       </div>
       <div className="card-foot">
-        <select
-          value={version.ref}
-          onChange={(e) => setRef(e.target.value)}
-          draggable={false}
-          onDragStart={(e) => e.preventDefault()}
-          data-testid={`card-version-${t.name}`}
-        >
-          {t.versions.map((v) => (
-            <option key={v.ref} value={v.ref}>
-              {v.label}
-              {v.ref === t.latest ? " (latest)" : ""}
-            </option>
-          ))}
-        </select>
         {t.inferred && (
           <span className="badge badge-warn" title={t.warnings.join("\n")}>
             ⚠
@@ -132,7 +132,7 @@ export function AssetBrowser() {
 
   const list = useMemo(() => Object.values(transformers).sort((a, b) => a.name.localeCompare(b.name)), [transformers]);
   const projects = health?.transformerProjects ?? [...new Set(list.map((t) => t.project))];
-  const tree = useMemo(() => folders(projects, list), [projects, list]);
+  const tree = useMemo(() => treeEntries(projects, list), [projects, list]);
 
   const toggleFavorite = (id: string) => {
     const next = favorites.includes(id) ? favorites.filter((f) => f !== id) : [...favorites, id];
@@ -214,17 +214,17 @@ export function AssetBrowser() {
             className={`tree-item tree-root${selected === null ? " active" : ""}`}
             onClick={() => setSelected(null)}
           >
-            ▾ Git paths
+            ▾ Transformers
           </div>
           {tree.map((f) => (
             <div
               key={f.key}
-              className={`tree-item depth-${Math.min(f.depth + 1, 4)}${selected === f.key ? " active" : ""}`}
+              className={`tree-item tree-${f.kind} depth-${Math.min(f.depth + 1, 4)}${selected === f.key ? " active" : ""}`}
               onClick={() => setSelected(f.key)}
-              title={`${f.project}/${f.path}`}
+              title={f.title}
               data-testid={`tree-${f.project}/${f.path}`}
             >
-              {f.depth === 0 ? "◆ " : "▸ 📁 "}
+              <span className="tree-icon">{f.kind === "repo" ? "◆" : f.kind === "folder" ? "📁" : "⚙"}</span>
               {f.label}
             </div>
           ))}
