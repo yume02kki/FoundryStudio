@@ -1,7 +1,5 @@
-import { useEffect, useRef, useState } from "react";
 import { api, ApiError } from "../api";
-import { useStudio } from "../store";
-import type { Issue } from "../types";
+import { useStudio, type Theme } from "../store";
 
 const CI_LABEL: Record<string, string> = {
   created: "pending",
@@ -17,74 +15,87 @@ const CI_LABEL: Record<string, string> = {
   scheduled: "scheduled",
 };
 
-export function focusIssue(issue: Issue) {
+const THEME_NEXT: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
+const THEME_ICON: Record<Theme, string> = { system: "◐", light: "☀", dark: "☾" };
+
+export async function saveDraft() {
   const s = useStudio.getState();
-  const edges = issue.edge ? [`${issue.edge[0]}->${issue.edge[1]}`] : [];
-  const nodes = issue.nodes.length ? issue.nodes : issue.node ? [issue.node] : [];
-  s.select({ nodes: issue.edge ? [] : nodes.slice(0, 1), edges });
-  s.setFocus({ nodes, edges });
+  if (!s.meta?.name || s.busy) return;
+  useStudio.setState({ busy: "save" });
+  try {
+    const graph = s.graph();
+    const res = await api.save(graph, s.layout());
+    s.markSaved({ kind: "draft", name: graph.name });
+    s.toast({ kind: "success", text: `Draft saved to ${res.path}` });
+    api.pipelines().then((p) => useStudio.setState({ pipelines: p.pipelines }));
+  } catch (e) {
+    s.toast({ kind: "error", text: `Save failed: ${(e as Error).message}` }, 9000);
+  } finally {
+    useStudio.setState({ busy: null });
+  }
 }
 
-function ValidationChip() {
+function ValidationStatus() {
   const validation = useStudio((s) => s.validation);
   const validating = useStudio((s) => s.validating);
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const close = (e: MouseEvent) => ref.current && !ref.current.contains(e.target as Node) && setOpen(false);
-    document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
-  }, []);
+  const open = useStudio((s) => s.issuesOpen);
+  const toggle = () => useStudio.setState({ issuesOpen: !open });
 
   if (!validation) {
-    return <div className="chip chip-muted">{validating ? "validating…" : "not validated"}</div>;
-  }
-  if (validation.ok) {
-    return (
-      <div className="chip chip-ok" data-testid="validation-status" title={validation.summary ?? ""}>
-        ✓ deploy.py: valid{validating ? " …" : ""}
-      </div>
-    );
+    return <span className="status status-muted">{validating ? "Validating…" : "Not validated"}</span>;
   }
   const n = validation.errors.length;
   return (
-    <div className="chip-wrap" ref={ref}>
-      <button className="chip chip-error" data-testid="validation-status" onClick={() => setOpen(!open)}>
-        ✗ {n} error{n === 1 ? "" : "s"}
-        {validating ? " …" : ""} ▾
-      </button>
-      {open && (
-        <div className="dropdown errors-list" data-testid="validation-errors">
-          <div className="dropdown-title">deploy.py validate</div>
-          {validation.errors.map((e) => (
-            <button
-              key={e.message}
-              className="error-item"
-              onClick={() => {
-                focusIssue(e);
-                setOpen(false);
-              }}
-            >
-              {e.message}
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
+    <button
+      className={`status ${validation.ok ? "status-success" : "status-danger"}`}
+      data-testid="validation-status"
+      onClick={toggle}
+      aria-expanded={open}
+      title={validation.ok ? validation.summary ?? "" : "Show problems"}
+    >
+      <span className="status-icon">{validation.ok ? "✓" : "!"}</span>
+      {validation.ok ? "Valid" : `${n} problem${n === 1 ? "" : "s"}`}
+      {validating && <span className="spinner" aria-label="validating" />}
+    </button>
   );
 }
 
-function MrChip() {
+function MergeRequestStatus() {
   const mr = useStudio((s) => s.mr);
-  if (!mr) return <div className="chip chip-muted">no merge requests</div>;
+  if (!mr) return null;
   const status = mr.pipeline?.status ?? null;
   const label = status ? CI_LABEL[status] ?? status : "no CI";
-  const cls = status === "success" ? "ok" : status === "failed" ? "error" : status === "running" || status === "pending" ? "running" : "muted";
+  const tone =
+    status === "success" ? "success" : status === "failed" ? "danger" : status === "running" || label === "pending" ? "running" : "muted";
   return (
-    <a className={`chip chip-${cls}`} href={mr.pipeline?.webUrl ?? mr.webUrl} target="_blank" rel="noreferrer" data-testid="mr-chip" title={mr.title}>
-      <span className="dot" /> !{mr.iid} · {mr.state} · CI {label}
+    <a
+      className={`status status-${tone}`}
+      href={mr.pipeline?.webUrl ?? mr.webUrl}
+      target="_blank"
+      rel="noreferrer"
+      data-testid="mr-chip"
+      title={`${mr.title}\n${mr.sourceBranch}`}
+    >
+      <span className="dot" />!{mr.iid} · {mr.state} · CI {label}
     </a>
+  );
+}
+
+function LiveStatus() {
+  const live = useStudio((s) => s.live);
+  const watcher = useStudio((s) => s.watcher);
+  const demo = useStudio((s) => s.health?.mode === "demo");
+  const errors = Object.entries(watcher?.errors ?? {});
+  const title = live
+    ? `Watching ${watcher?.projects.join(", ")} (${watcher?.mode}, every ${watcher?.pollInterval}s)` +
+      (errors.length ? `\n${errors.map(([p, e]) => `${p}: ${e}`).join("\n")}` : "")
+    : "Live updates disconnected; reconnecting…";
+  return (
+    <span className={`live ${live ? (errors.length ? "live-warn" : "live-on") : "live-off"}`} title={title} data-testid="live-chip">
+      <span className="dot" />
+      {live ? (errors.length ? "Watch errors" : "Live") : "Offline"}
+      {demo && <span className="tag tag-muted">demo</span>}
+    </span>
   );
 }
 
@@ -94,35 +105,25 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
   const dirty = useStudio((s) => s.dirty);
   const pipelines = useStudio((s) => s.pipelines);
   const busy = useStudio((s) => s.busy);
-  const health = useStudio((s) => s.health);
-  const watcher = useStudio((s) => s.watcher);
-  const live = useStudio((s) => s.live);
-
-  const save = async () => {
-    const s = useStudio.getState();
-    useStudio.setState({ busy: "save" });
-    try {
-      const graph = s.graph();
-      const res = await api.save(graph, s.layout());
-      s.markSaved({ kind: "draft", name: graph.name });
-      s.toast({ kind: "success", text: `Saved ${res.path}` });
-      api.pipelines().then((p) => useStudio.setState({ pipelines: p.pipelines }));
-    } catch (e) {
-      s.toast({ kind: "error", text: `Save failed: ${(e as Error).message}` }, 9000);
-    } finally {
-      useStudio.setState({ busy: null });
-    }
-  };
+  const theme = useStudio((s) => s.theme);
+  const setTheme = useStudio((s) => s.setTheme);
 
   const value = origin.kind === "new" ? "" : `${origin.kind}:${origin.name}`;
-  const watchErrors = Object.keys(watcher?.errors ?? {}).length;
+  const originLabel = origin.kind === "new" ? "New" : origin.kind === "draft" ? "Local draft" : "PipelineDeploys";
 
   return (
     <header className="topbar">
-      <div className="brand">◆ Foundry Studio</div>
+      <div className="brand">
+        <span className="logo" aria-hidden>
+          ⬡
+        </span>
+        Foundry Studio
+      </div>
+      <span className="divider" />
       <select
         className="picker"
         value={value}
+        aria-label="Open pipeline"
         data-testid="pipeline-picker"
         onChange={(e) => {
           const v = e.target.value;
@@ -131,42 +132,54 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
           onOpen(name, source as "draft" | "deployed");
         }}
       >
-        {origin.kind === "new" && <option value="">New pipeline</option>}
-        {pipelines.map((p) => [
-          p.deployed && (
-            <option key={`d-${p.name}`} value={`deployed:${p.name}`}>
-              {p.name} (PipelineDeploys)
-            </option>
-          ),
-          p.draft && (
-            <option key={`l-${p.name}`} value={`draft:${p.name}`}>
-              {p.name} (local draft)
-            </option>
-          ),
-        ])}
-        <option value="__new">+ New pipeline…</option>
+        {origin.kind === "new" && <option value="">Untitled pipeline</option>}
+        {pipelines.some((p) => p.deployed) && (
+          <optgroup label="Deployed (PipelineDeploys)">
+            {pipelines
+              .filter((p) => p.deployed)
+              .map((p) => (
+                <option key={`d-${p.name}`} value={`deployed:${p.name}`}>
+                  {p.name}
+                </option>
+              ))}
+          </optgroup>
+        )}
+        {pipelines.some((p) => p.draft) && (
+          <optgroup label="Local drafts">
+            {pipelines
+              .filter((p) => p.draft)
+              .map((p) => (
+                <option key={`l-${p.name}`} value={`draft:${p.name}`}>
+                  {p.name}
+                </option>
+              ))}
+          </optgroup>
+        )}
+        <option value="__new">＋ New pipeline</option>
       </select>
-      <div className="pipeline-name" data-testid="pipeline-title">
-        {meta?.name || <span className="muted">unnamed</span>}
-        {dirty && <span className="dirty" title="Unsaved changes"> ●</span>}
+      <div className="title" data-testid="pipeline-title">
+        <span className="title-name">{meta?.name || <span className="muted">Untitled</span>}</span>
+        <span className="tag tag-muted">{originLabel}</span>
+        {dirty && (
+          <span className="unsaved" title="Unsaved changes">
+            Unsaved
+          </span>
+        )}
       </div>
-      <ValidationChip />
-      <span className="spacer" />
-      <div
-        className={`chip chip-${live ? (watchErrors ? "warn" : "muted") : "error"}`}
-        title={
-          live
-            ? `Watching ${watcher?.projects.join(", ")} (${watcher?.mode}, every ${watcher?.pollInterval}s)` +
-              (watchErrors ? `\n${Object.entries(watcher!.errors).map(([p, e]) => `${p}: ${e}`).join("\n")}` : "")
-            : "Live updates disconnected"
-        }
-        data-testid="live-chip"
+      <span className="grow" />
+      <LiveStatus />
+      <MergeRequestStatus />
+      <ValidationStatus />
+      <span className="divider" />
+      <button
+        className="icon-btn theme"
+        onClick={() => setTheme(THEME_NEXT[theme])}
+        title={`Theme: ${theme} (click to change)`}
+        aria-label={`Theme: ${theme}`}
       >
-        <span className={`dot ${live ? "dot-live" : ""}`} /> {live ? watcher?.mode ?? "live" : "offline"}
-        {health?.mode === "demo" ? " · demo" : ""}
-      </div>
-      <MrChip />
-      <button className="btn" onClick={save} disabled={!meta?.name || busy !== null} data-testid="save">
+        {THEME_ICON[theme]}
+      </button>
+      <button className="btn" onClick={saveDraft} disabled={!meta?.name || busy !== null} data-testid="save" title="Save draft (Ctrl/⌘ S)">
         {busy === "save" ? "Saving…" : "Save"}
       </button>
       <button
@@ -174,6 +187,7 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
         onClick={() => useStudio.setState({ deployOpen: true })}
         disabled={!meta?.name || busy !== null}
         data-testid="deploy"
+        title="Render with deploy.py and open a merge request on PipelineDeploys"
       >
         {busy === "deploy" ? "Deploying…" : "Deploy"}
       </button>
@@ -196,7 +210,7 @@ export async function runDeploy() {
         {
           kind: "success",
           text: `Merge request opened from ${res.branch ?? "a deploy branch"}`,
-          link: res.mrUrl ? { href: res.mrUrl, label: res.mrUrl } : undefined,
+          link: res.mrUrl ? { href: res.mrUrl, label: "View merge request ↗" } : undefined,
           testId: "deploy-result",
         },
         15000,

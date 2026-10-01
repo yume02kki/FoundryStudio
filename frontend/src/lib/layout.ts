@@ -1,6 +1,6 @@
 import { SINK, SOURCE, type GraphEdge, type GraphNode, type Layout } from "../types";
 
-export const COLUMN = 380;
+export const COLUMN = 300;
 export const ROW = 130;
 
 /** Layered left-to-right layout for pipelines without a <Name>.layout.json. */

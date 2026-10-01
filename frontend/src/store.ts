@@ -35,6 +35,17 @@ export interface Toast {
   testId?: string;
 }
 
+export type Theme = "system" | "light" | "dark";
+
+function loadTheme(): Theme {
+  try {
+    const t = localStorage.getItem("foundry-studio.theme");
+    return t === "light" || t === "dark" ? t : "system";
+  } catch {
+    return "system";
+  }
+}
+
 export type Origin = { kind: "new" } | { kind: "draft" | "deployed"; name: string };
 
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -75,6 +86,8 @@ interface State {
   live: boolean;
 
   toasts: Toast[];
+  theme: Theme;
+  issuesOpen: boolean;
   versionPickerFor: string | null;
   deployOpen: boolean;
   busy: "save" | "deploy" | null;
@@ -97,6 +110,7 @@ interface State {
   upsertTransformer: (info: TransformerInfo, kind: "added" | "updated") => void;
   removeTransformer: (id: string) => void;
 
+  setTheme: (theme: Theme) => void;
   toast: (t: Omit<Toast, "id">, ttl?: number) => void;
   dismiss: (id: number) => void;
 }
@@ -124,6 +138,8 @@ export const useStudio = create<State>()((set, get) => ({
   live: false,
 
   toasts: [],
+  theme: loadTheme(),
+  issuesOpen: false,
   versionPickerFor: null,
   deployOpen: false,
   busy: null,
@@ -271,6 +287,15 @@ export const useStudio = create<State>()((set, get) => ({
       delete transformers[id];
       return { transformers };
     }),
+
+  setTheme: (theme) => {
+    try {
+      localStorage.setItem("foundry-studio.theme", theme);
+    } catch {
+      /* not persisted */
+    }
+    set({ theme });
+  },
 
   toast: (t, ttl = 6000) => {
     const id = ++toastSeq;

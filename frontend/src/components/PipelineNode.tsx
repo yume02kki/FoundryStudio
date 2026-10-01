@@ -30,12 +30,10 @@ function Port({ nodeId, port, schema }: { nodeId: string; port: "in" | "out"; sc
         type={port === "in" ? "target" : "source"}
         position={port === "in" ? Position.Left : Position.Right}
         className="handle"
-        style={{ background: color, borderColor: color }}
+        style={{ ["--schema" as string]: color }}
       />
-      <span className="port-label" style={{ color }}>
-        {port === "in" ? "▸ " : ""}
+      <span className="port-label" style={{ ["--schema" as string]: color }}>
         {schema ?? "untyped"}
-        {port === "out" ? " ▸" : ""}
       </span>
     </div>
   );
@@ -53,11 +51,12 @@ function PipelineNodeView({ id, data, selected }: NodeProps<PNode>) {
   const version = versionFor(info, spec.transformer?.Ref);
   const update = updateFor(info, spec.transformer?.Ref);
 
-  const title = spec.kind === "source" ? "Source" : spec.kind === "output" ? "Output" : "Transformer";
+  const kindLabel = spec.kind === "source" ? "Source" : spec.kind === "output" ? "Output" : "Transform";
+  const icon = spec.kind === "source" ? "⇥" : spec.kind === "output" ? "⇤" : "ƒ";
   const subtitle =
     spec.kind === "transformer"
       ? version?.label ?? spec.transformer?.Ref ?? "no version"
-      : [spec.sink?.Type ?? "Kafka", spec.sink?.Topic].filter(Boolean).join(" · ");
+      : spec.sink?.Topic || "no topic";
 
   return (
     <div
@@ -65,39 +64,55 @@ function PipelineNodeView({ id, data, selected }: NodeProps<PNode>) {
       data-testid={`node-${id}`}
       title={errors.map((e) => e.message).join("\n") || undefined}
     >
-      <div className="pnode-head">
-        <span className="pnode-kind">{title}</span>
-        {info?.inferred && (
-          <span className="badge badge-warn" title={info.warnings.join("\n")}>
-            ⚠ inferred
+      <div className="pnode-body">
+        <span className="pnode-icon" aria-hidden>
+          {icon}
+        </span>
+        <div className="pnode-text">
+          <div className="pnode-kind">
+            {kindLabel}
+            {spec.kind !== "transformer" && <span> · {spec.sink?.Type ?? "Kafka"}</span>}
+          </div>
+          <div className="pnode-title">{id}</div>
+          <div className="pnode-sub">{subtitle}</div>
+        </div>
+        {errors.length > 0 && (
+          <span className="pnode-error-count" title={errors.map((e) => e.message).join("\n")}>
+            {errors.length}
           </span>
-        )}
-        {spec.kind === "transformer" && !info && (
-          <span className="badge badge-muted" title="Not found among discovered transformers">
-            ?
-          </span>
-        )}
-        {update && (
-          <button
-            className="badge badge-update nodrag"
-            data-testid={`update-${id}`}
-            title={`Update available: ${update.label}`}
-            onClick={(e) => {
-              e.stopPropagation();
-              useStudio.setState({ versionPickerFor: id });
-            }}
-          >
-            ⬆ {update.label}
-          </button>
         )}
       </div>
-      <div className="pnode-title">{id}</div>
-      <div className="pnode-sub">{subtitle || " "}</div>
+      {(info?.inferred || update || (spec.kind === "transformer" && !info)) && (
+        <div className="pnode-tags">
+          {update && (
+            <button
+              className="tag tag-update nodrag"
+              data-testid={`update-${id}`}
+              title={`Update available: ${update.label}. Click to pick a version.`}
+              onClick={(e) => {
+                e.stopPropagation();
+                useStudio.setState({ versionPickerFor: id });
+              }}
+            >
+              ↑ {update.label} available
+            </button>
+          )}
+          {info?.inferred && (
+            <span className="tag tag-warning" title={info.warnings.join("\n")}>
+              Inferred types
+            </span>
+          )}
+          {spec.kind === "transformer" && !info && (
+            <span className="tag tag-muted" title="Not found among the discovered transformers">
+              Unknown source
+            </span>
+          )}
+        </div>
+      )}
       <div className="pnode-ports">
         {spec.kind !== "source" ? <Port nodeId={id} port="in" schema={expects(spec)} /> : <span />}
         {spec.kind !== "output" ? <Port nodeId={id} port="out" schema={emits(spec)} /> : <span />}
       </div>
-      {errors.length > 0 && <div className="pnode-errors">{errors.length} issue{errors.length > 1 ? "s" : ""}</div>}
     </div>
   );
 }

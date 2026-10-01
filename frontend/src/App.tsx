@@ -1,11 +1,12 @@
 import { ReactFlowProvider } from "@xyflow/react";
 import { useCallback, useEffect, useRef } from "react";
 import { api, subscribe } from "./api";
-import { AssetBrowser } from "./components/AssetBrowser";
 import { Canvas } from "./components/Canvas";
 import { DeployDialog, Toasts, VersionPicker } from "./components/Dialogs";
 import { Inspector } from "./components/Inspector";
-import { TopBar } from "./components/TopBar";
+import { IssuesPanel } from "./components/IssuesPanel";
+import { Library } from "./components/Library";
+import { saveDraft, TopBar } from "./components/TopBar";
 import { SINK, SOURCE } from "./types";
 import { useStudio } from "./store";
 
@@ -79,9 +80,32 @@ function useLiveUpdates() {
   }, []);
 }
 
+function useTheme() {
+  const theme = useStudio((s) => s.theme);
+  useEffect(() => {
+    if (theme === "system") delete document.documentElement.dataset.theme;
+    else document.documentElement.dataset.theme = theme;
+  }, [theme]);
+}
+
+function useShortcuts() {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        void saveDraft();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+}
+
 export default function App() {
   useValidation();
   useLiveUpdates();
+  useTheme();
+  useShortcuts();
 
   const confirmDiscard = () => !useStudio.getState().dirty || window.confirm("Discard unsaved changes?");
 
@@ -127,13 +151,14 @@ export default function App() {
     <ReactFlowProvider>
       <div className="app">
         <TopBar onOpen={open} onNew={openNew} />
-        <div className="workspace">
-          <div className="upper">
+        <main className="workspace">
+          <Library />
+          <div className="center">
             <Canvas />
-            <Inspector />
+            <IssuesPanel />
           </div>
-          <AssetBrowser />
-        </div>
+          <Inspector />
+        </main>
         <VersionPicker />
         <DeployDialog />
         <Toasts />
