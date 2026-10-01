@@ -65,6 +65,20 @@ A personal access token with `read_api` and `read_repository` is enough to brows
 Add `write_repository` and `api` to deploy. Nothing is written to GitLab except when you click
 **Deploy**. **Save** writes locally (see below).
 
+## Deploying to a server
+
+```sh
+scripts/deploy_server.sh ubuntu@<host>          # from your machine, in this checkout
+ssh -N -L 8000:127.0.0.1:8000 ubuntu@<host>      # then open http://localhost:8000
+```
+
+The script builds the frontend, copies the app to `/opt/foundry-studio` with rsync, installs `uv`
+and the backend's dependencies, and runs it as the `foundry-studio` systemd service. Studio has
+no login, so the service listens on **127.0.0.1 only**. Reach it through the SSH tunnel; don't
+expose port 8000 publicly. The token goes in `/etc/foundry-studio.env` (mode 600,
+`GITLAB_TOKEN=…`). The script creates that file but never sends a token. Re-run the script to
+update.
+
 ## Configuration
 
 All configuration comes from environment variables; the defaults fit the yume02kki projects.
