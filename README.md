@@ -206,7 +206,9 @@ that hand-written comments in a loaded manifest aren't preserved.
 Internal datasets (`<Pipeline>.<Transformer>.out`) and the pipeline-level settings (`Registry`,
 `Defaults.InternalDatasets`, `Schemas`) aren't shown or edited in the UI. They come from the loaded
 manifest, or for a new pipeline from foundry's example manifest, and are written back unchanged. The
-pipeline's name is edited in place in the top bar. Sinks have a `SecretRef` field and no password
+pipeline's name is edited in place in the top bar. Click a connection to see and edit its Kafka connection settings: InputSink's
+or OutputSink's own for the sink topics, or `Defaults.InternalDatasets.ConnectionSettings` (shared by all
+internal topics) for connections between transformers. Sinks have a `SecretRef` field and no password
 field, and deploy.py rejects credential-like keys anyway.
 
 ### Save, drafts and layout

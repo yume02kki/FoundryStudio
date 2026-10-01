@@ -224,7 +224,7 @@ export function AssetBrowser() {
               title={f.title}
               data-testid={`tree-${f.project}/${f.path}`}
             >
-              <span className="tree-icon">{f.kind === "repo" ? "◆" : f.kind === "folder" ? "📁" : "⚙"}</span>
+              <span className="tree-icon">{f.kind === "transformer" ? "⚙" : "📁"}</span>
               {f.label}
             </div>
           ))}

@@ -76,3 +76,32 @@ test("AC3: wiring InputSink -> XmlToJson -> OutputSink is refused with deploy.py
   await expect(page.getByTestId("rf__edge-XmlToJson->OutputSink")).toHaveCount(0);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
 });
+
+test("clicking a connection shows and edits its Kafka connection settings", async ({ page }) => {
+  await page.goto("/?pipeline=SWpipeline&source=deployed");
+  await expect(page.getByTestId("node-XmlToJson")).toBeVisible();
+  const inspector = page.getByTestId("inspector");
+
+  // Source -> transformer: the InputSink's own settings.
+  await page.getByTestId("rf__edge-InputSink->XmlToJson").click({ force: true });
+  await expect(page.getByTestId("edge-topic")).toHaveValue("raw.xml");
+  await expect(page.getByTestId("edge-brokers")).toHaveValue("upstream-kafka:9092");
+  await expect(page.getByTestId("edge-secretref")).toHaveValue("upstream-kafka-creds");
+
+  // Transformer -> transformer: the shared internal-topic settings.
+  await page.getByTestId("rf__edge-XmlToJson->Base64Decoder").click({ force: true });
+  await expect(page.getByTestId("edge-topic")).toHaveValue("SWpipeline.XmlToJson.out");
+  await expect(inspector).toContainText("shared by all internal topics");
+  await expect(page.getByTestId("edge-brokers")).toHaveValue("kafka-internal:9092");
+  await page.getByTestId("edge-brokers").fill("kafka-internal-2:9092");
+
+  // Transformer -> Output: the OutputSink's settings.
+  await page.getByTestId("rf__edge-Base64Decoder->OutputSink").click({ force: true });
+  await expect(page.getByTestId("edge-brokers")).toHaveValue("downstream-kafka:9092");
+
+  // The edit lands in the manifest (Defaults.InternalDatasets.ConnectionSettings).
+  await expect(page.getByTestId("validation-status")).toContainText("valid");
+  await page.getByTestId("deploy").click();
+  await expect(page.locator(".manifest-preview")).toContainText("Brokers: kafka-internal-2:9092");
+  await expect(page.locator(".manifest-preview")).toContainText("Brokers: upstream-kafka:9092");
+});
