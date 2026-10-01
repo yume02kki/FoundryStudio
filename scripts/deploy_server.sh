@@ -39,7 +39,7 @@ UV="$(command -v uv || echo "$HOME/.local/bin/uv")"
 
 if ! sudo test -f /etc/foundry-studio.env; then
   sudo install -m 600 /dev/null /etc/foundry-studio.env
-  echo "# GITLAB_TOKEN=glpat-...   (read_api, read_repository, write_repository, api)" | sudo tee /etc/foundry-studio.env >/dev/null
+  printf "%s\n" "# GITLAB_TOKEN=glpat-...   (read_api, read_repository)" "# STUDIO_DEPLOY_TARGET=/etc/foundry/target.yaml   (foundry target.example.yaml)" | sudo tee /etc/foundry-studio.env >/dev/null
 fi
 sudo chmod 600 /etc/foundry-studio.env
 

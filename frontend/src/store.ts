@@ -2,16 +2,16 @@ import { applyEdgeChanges, applyNodeChanges, type Edge, type EdgeChange, type No
 import { create } from "zustand";
 import { autoLayout } from "./lib/layout";
 import {
-  SINK,
-  SOURCE,
-  type Defaults,
+  datasetNode,
+  type Catalog,
+  type DeployHistory,
+  type FeedMessage,
+  type FeedState,
   type Graph,
   type GraphNode,
   type Health,
+  type Issue,
   type Layout,
-  type MergeRequest,
-  type FeedMessage,
-  type FeedState,
   type PipelineListing,
   type TransformerInfo,
   type ValidationResult,
@@ -22,13 +22,13 @@ const FEED_KEEP = 200;
 const idleFeed = (): FeedState => ({ state: "idle", messages: [], count: 0 });
 
 export type PipelineNodeData = { spec: GraphNode };
-export type PNode = Node<PipelineNodeData, "pipeline">;
+export type PNode = Node<PipelineNodeData, "transformer" | "dataset">;
 export type PEdge = Edge<Record<string, never>, "topic">;
 
 export interface Meta {
   name: string;
-  defaults: Defaults;
-  schemas: Record<string, string>;
+  catalog: string;
+  consumerGroup: string;
   extra: Record<string, unknown>;
 }
 
@@ -40,19 +40,21 @@ export interface Toast {
   testId?: string;
 }
 
-export type Origin = { kind: "new" } | { kind: "draft" | "deployed"; name: string };
+export type Origin = { kind: "new" } | { kind: "saved"; name: string };
+
+export interface DeployRun {
+  op: "deploy" | "rollback" | "stop";
+  running: boolean;
+  log: string[];
+  outcome: { ok: boolean; text: string; errors?: Issue[] } | null;
+}
 
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+export const TOPIC_RE = /^[A-Za-z0-9._-]{1,249}$/;
 export const edgeId = (source: string, target: string) => `${source}->${target}`;
 
 function toPNode(spec: GraphNode, position: { x: number; y: number }): PNode {
-  return {
-    id: spec.id,
-    type: "pipeline",
-    position,
-    data: { spec },
-    deletable: spec.kind === "transformer",
-  };
+  return { id: spec.id, type: spec.kind, position, data: { spec } };
 }
 
 function toPEdge(source: string, target: string): PEdge {
@@ -65,27 +67,31 @@ interface State {
   edges: PEdge[];
   origin: Origin;
   loadId: number;
-  revision: number; // bumps on every change that affects the manifest
+  revision: number; // bumps on every change that affects the manifest (or the catalog)
   dirty: boolean;
   focus: { nodes: string[]; edges: string[] } | null;
   validation: ValidationResult | null;
   validating: boolean;
 
+  catalog: Catalog | null;
+  catalogDirty: boolean;
+
   transformers: Record<string, TransformerInfo>;
   changed: Record<string, { kind: "added" | "updated"; at: number }>;
-  mr: MergeRequest | null;
   watcher: WatcherStatus | null;
   health: Health | null;
   pipelines: PipelineListing[];
   live: boolean;
 
   toasts: Toast[];
-  bottomTab: "project" | "live";
+  bottomTab: "transformers" | "datasets" | "live";
   feedsOn: boolean;
   liveStage: string | null; // the node whose data Live data shows
-  feeds: Record<string, FeedState>; // by writerKey (see lib/stages.ts)
+  feeds: Record<string, FeedState>; // by dataset name
   versionPickerFor: string | null;
   deployOpen: boolean;
+  deployRun: DeployRun | null;
+  history: DeployHistory | null;
   busy: "save" | "deploy" | null;
 
   graph: () => Graph;
@@ -95,9 +101,11 @@ interface State {
   onEdgesChange: (changes: EdgeChange<PEdge>[]) => void;
   connect: (source: string, target: string) => void;
   addTransformer: (info: TransformerInfo, ref: string, position: { x: number; y: number }) => string;
+  addDataset: (name: string, position: { x: number; y: number }) => string;
   updateSpec: (id: string, update: (spec: GraphNode) => GraphNode) => void;
   renameNode: (from: string, to: string) => string | null;
   updateMeta: (update: (meta: Meta) => Meta) => void;
+  updateCatalog: (update: (catalog: Catalog) => Catalog) => void;
   select: (ids: { nodes?: string[]; edges?: string[] }) => void;
   setFocus: (focus: State["focus"]) => void;
   markSaved: (origin: Origin) => void;
@@ -126,29 +134,33 @@ export const useStudio = create<State>()((set, get) => ({
   validation: null,
   validating: false,
 
+  catalog: null,
+  catalogDirty: false,
+
   transformers: {},
   changed: {},
-  mr: null,
   watcher: null,
   health: null,
   pipelines: [],
   live: false,
 
   toasts: [],
-  bottomTab: "project",
+  bottomTab: "transformers",
   feedsOn: false,
   liveStage: null,
   feeds: {},
   versionPickerFor: null,
   deployOpen: false,
+  deployRun: null,
+  history: null,
   busy: null,
 
   graph: () => {
     const { meta, nodes, edges } = get();
     return {
       name: meta?.name ?? "",
-      defaults: meta?.defaults ?? {},
-      schemas: meta?.schemas ?? {},
+      catalog: meta?.catalog ?? "../catalog.yaml",
+      consumerGroup: meta?.consumerGroup ?? "",
       extra: meta?.extra ?? {},
       nodes: nodes.map((n) => n.data.spec),
       edges: edges.map((e) => ({ source: e.source, target: e.target })),
@@ -166,7 +178,12 @@ export const useStudio = create<State>()((set, get) => ({
     const auto = autoLayout(graph.nodes, graph.edges);
     const pos = (id: string) => layout?.positions?.[id] ?? auto[id] ?? { x: 0, y: 0 };
     set((s) => ({
-      meta: { name: graph.name, defaults: graph.defaults ?? {}, schemas: graph.schemas ?? {}, extra: graph.extra ?? {} },
+      meta: {
+        name: graph.name,
+        catalog: graph.catalog || "../catalog.yaml",
+        consumerGroup: graph.consumerGroup ?? "",
+        extra: graph.extra ?? {},
+      },
       nodes: graph.nodes.map((n) => toPNode(n, pos(n.id))),
       edges: graph.edges.map((e) => toPEdge(e.source, e.target)),
       origin,
@@ -175,6 +192,8 @@ export const useStudio = create<State>()((set, get) => ({
       dirty: false,
       focus: null,
       validation: null,
+      history: null,
+      deployRun: null,
     }));
   },
 
@@ -213,9 +232,9 @@ export const useStudio = create<State>()((set, get) => ({
   addTransformer: (info, ref, position) => {
     const taken = new Set(get().nodes.map((n) => n.id));
     let id = info.name.replace(/[^A-Za-z0-9._-]/g, "") || "Transformer";
-    for (let i = 2; taken.has(id) || id === SOURCE || id === SINK; i++) id = `${info.name}${i}`;
+    for (let i = 2; taken.has(id); i++) id = `${info.name}${i}`;
     // No Ref unless a version was asked for: the transformer follows its default branch
-    // (foundry: a missing Ref means HEAD; the lock file pins the commit at deploy time).
+    // (foundry: a missing Ref means HEAD; the deploy record pins the commit).
     const version = ref ? info.versions.find((v) => v.ref === ref) : info.versions.find((v) => v.kind === "branch");
     const spec: GraphNode = {
       id,
@@ -236,6 +255,22 @@ export const useStudio = create<State>()((set, get) => ({
     return id;
   },
 
+  addDataset: (name, position) => {
+    const id = datasetNode(name);
+    set((s) => {
+      if (s.nodes.some((n) => n.id === id)) {
+        return { nodes: s.nodes.map((n) => ({ ...n, selected: n.id === id })), focus: { nodes: [id], edges: [] } };
+      }
+      const spec: GraphNode = { id, kind: "dataset", dataset: name };
+      return {
+        nodes: [...s.nodes.map((n) => ({ ...n, selected: false })), { ...toPNode(spec, position), selected: true }],
+        revision: s.revision + 1,
+        dirty: true,
+      };
+    });
+    return id;
+  },
+
   updateSpec: (id, update) =>
     set((s) => ({
       nodes: s.nodes.map((n) => (n.id === id ? { ...n, data: { spec: update(n.data.spec) } } : n)),
@@ -247,7 +282,6 @@ export const useStudio = create<State>()((set, get) => ({
     const s = get();
     if (from === to) return null;
     if (!NAME_RE.test(to)) return `name must match ${NAME_RE.source}`;
-    if (to === SOURCE || to === SINK) return "name is reserved";
     if (s.nodes.some((n) => n.id === to)) return `${to} already exists`;
     const ren = (id: string) => (id === from ? to : id);
     set({
@@ -263,6 +297,9 @@ export const useStudio = create<State>()((set, get) => ({
 
   updateMeta: (update) =>
     set((s) => (s.meta ? { meta: update(s.meta), revision: s.revision + 1, dirty: true } : s)),
+
+  updateCatalog: (update) =>
+    set((s) => (s.catalog ? { catalog: update(s.catalog), catalogDirty: true, revision: s.revision + 1 } : s)),
 
   select: ({ nodes = [], edges = [] }) =>
     set((s) => ({

@@ -4,8 +4,8 @@ import { expect, test } from "@playwright/test";
 import { demo } from "./helpers";
 
 // Polling mode (the default 10 s interval): no webhooks, no reloads.
-test("AC4-6: new tag, new transformer and merge request CI show up live", async ({ page }) => {
-  await page.goto("/?pipeline=SWpipeline&source=deployed");
+test("AC4-6: new tag and new transformer show up live; deploy, history, rollback", async ({ page }) => {
+  await page.goto("/?pipeline=SWpipeline");
   await expect(page.getByTestId("node-Base64Decoder")).toBeVisible();
   await expect(page.getByTestId("card-Base64Decoder")).toBeVisible();
   await page.evaluate(() => ((window as unknown as { __noReload: boolean }).__noReload = true));
@@ -27,16 +27,19 @@ test("AC4-6: new tag, new transformer and merge request CI show up live", async 
   await expect(page.getByTestId("card-Deduplicate")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("card-Deduplicate")).toContainText("Packets");
 
-  // AC6: Deploy opens a merge request; its CI status follows along.
+  // AC6: Deploy saves the change (the new Ref) and records a new deploy; an older one can be run again.
   await page.getByTestId("deploy").click();
   await page.getByTestId("deploy-confirm").click();
-  await expect(page.getByTestId("deploy-result")).toContainText("Merge request opened");
-  await expect(page.getByTestId("mr-chip")).toContainText("!1");
-  await expect(page.getByTestId("mr-chip")).toContainText("CI running");
-  demo("ci", "1", "failed");
-  await expect(page.getByTestId("mr-chip")).toContainText("CI failed", { timeout: 15_000 });
-  demo("ci", "1", "success");
-  await expect(page.getByTestId("mr-chip")).toContainText("CI passed", { timeout: 15_000 });
+  await expect(page.getByTestId("deploy-outcome")).toContainText(/Deployed SWpipeline as 000\d-/);
+  const rows = page.getByTestId("deploy-history").locator("tbody tr");
+  expect(await rows.count()).toBeGreaterThanOrEqual(2);
+  await expect(rows.first()).toContainText("current");
+  const older = (await rows.nth(1).locator("td").first().textContent())!;
+  page.once("dialog", (d) => void d.accept());
+  await page.getByTestId(`rollback-${older}`).click();
+  await expect(page.getByTestId("deploy-outcome")).toContainText(`back to ${older}`);
+  await expect(rows.first()).toContainText(`rollback of ${older}`);
+  await expect(page.getByTestId("deploy-chip")).toContainText("rolled back");
 
   expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload)).toBe(true);
 });

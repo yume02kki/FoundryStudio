@@ -1,20 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { FeedMessage, GraphNode } from "../types";
 import type { FeedState } from "../types";
-import { diffRecords, liveKeys, pairRecords, recordId, stageFeeds, stageStats, stages, writerKey, type GraphLike } from "./stages";
+import { diffRecords, edgeDataset, liveKeys, pairRecords, recordId, stageFeeds, stageStats, stages, type GraphLike } from "./stages";
 
 const t = (id: string): GraphNode => ({ id, kind: "transformer", transformer: {} });
+const d = (name: string): GraphNode => ({ id: `dataset:${name}`, kind: "dataset", dataset: name });
 const graph: GraphLike = {
-  nodes: [
-    { id: "InputSink", kind: "source" },
-    { id: "OutputSink", kind: "output" },
-    t("Base64Decoder"),
-    t("XmlToJson"),
-  ],
+  nodes: [d("packets.decoded"), t("Base64Decoder"), d("raw.xml"), t("XmlToJson"), d("encoded")],
   edges: [
-    { source: "InputSink", target: "XmlToJson" },
-    { source: "XmlToJson", target: "Base64Decoder" },
-    { source: "Base64Decoder", target: "OutputSink" },
+    { source: "dataset:raw.xml", target: "XmlToJson" },
+    { source: "XmlToJson", target: "dataset:encoded" },
+    { source: "dataset:encoded", target: "Base64Decoder" },
+    { source: "Base64Decoder", target: "dataset:packets.decoded" },
   ],
 };
 
@@ -33,16 +30,18 @@ const msg = (value: string, secondsAgo: number, key: string | null = null): Feed
 });
 
 describe("stages", () => {
-  it("orders stages along the pipeline", () => {
-    expect(stages(graph)).toEqual(["InputSink", "XmlToJson", "Base64Decoder", "OutputSink"]);
+  it("orders datasets and transformers along the pipeline", () => {
+    expect(stages(graph)).toEqual([
+      "dataset:raw.xml", "XmlToJson", "dataset:encoded", "Base64Decoder", "dataset:packets.decoded",
+    ]);
   });
 
-  it("knows what each stage reads and writes (deploy.py's endpoint_id)", () => {
-    expect(writerKey(graph, "XmlToJson")).toBe("XmlToJson"); // internal dataset
-    expect(writerKey(graph, "Base64Decoder")).toBe("OutputSink"); // writes the sink's topic
-    expect(stageFeeds(graph, "XmlToJson")).toEqual({ inputs: ["InputSink"], output: "XmlToJson" });
-    expect(stageFeeds(graph, "Base64Decoder")).toEqual({ inputs: ["XmlToJson"], output: "OutputSink" });
-    expect(stageFeeds(graph, "OutputSink")).toEqual({ inputs: [], output: "OutputSink" });
+  it("knows what each stage reads and writes", () => {
+    expect(stageFeeds(graph, "XmlToJson")).toEqual({ inputs: ["raw.xml"], outputs: ["encoded"] });
+    expect(stageFeeds(graph, "Base64Decoder")).toEqual({ inputs: ["encoded"], outputs: ["packets.decoded"] });
+    expect(stageFeeds(graph, "dataset:raw.xml")).toEqual({ inputs: [], outputs: ["raw.xml"] });
+    expect(edgeDataset("XmlToJson", "dataset:encoded")).toBe("encoded");
+    expect(edgeDataset("dataset:raw.xml", "XmlToJson")).toBe("raw.xml");
   });
 });
 
@@ -80,22 +79,22 @@ describe("diffRecords", () => {
 
 describe("live overview", () => {
   const feed = (messages: FeedMessage[]): FeedState => ({ state: "live", messages, count: messages.length });
-  it("watches one feed per topic", () => {
-    expect(liveKeys(graph)).toEqual(["InputSink", "XmlToJson", "OutputSink"]);
+  it("watches one feed per dataset", () => {
+    expect(liveKeys(graph)).toEqual(["raw.xml", "encoded", "packets.decoded"]);
   });
 
   it("summarises a transformer's throughput and drops", () => {
     const feeds = {
-      XmlToJson: feed([msg('{"guid":"a"}', 2), msg('{"guid":"b"}', 20), msg('{"guid":"c"}', 30)]),
-      OutputSink: feed([msg('{"guid":"a"}', 1), msg('{"guid":"c"}', 29)]),
+      encoded: feed([msg('{"guid":"a"}', 2), msg('{"guid":"b"}', 20), msg('{"guid":"c"}', 30)]),
+      "packets.decoded": feed([msg('{"guid":"a"}', 1), msg('{"guid":"c"}', 29)]),
     };
     const s = stageStats(graph, "Base64Decoder", feeds, NOW);
     expect(s).toMatchObject({ inRate: 3, outRate: 2, transformed: 2, dropped: 1, tone: "warning", label: "3 in → 2 out/min" });
-    expect(stageStats(graph, "OutputSink", feeds, NOW)).toMatchObject({ inRate: 2, tone: "success" });
+    expect(stageStats(graph, "dataset:packets.decoded", feeds, NOW)).toMatchObject({ inRate: 2, tone: "success" });
   });
 
   it("flags a transformer that receives but produces nothing", () => {
-    const feeds = { XmlToJson: feed([msg('{"guid":"a"}', 2)]), OutputSink: feed([]) };
+    const feeds = { encoded: feed([msg('{"guid":"a"}', 2)]), "packets.decoded": feed([]) };
     expect(stageStats(graph, "Base64Decoder", feeds, NOW).tone).toBe("danger");
     expect(stageStats(graph, "Base64Decoder", {}, NOW).label).toBe("Off");
   });

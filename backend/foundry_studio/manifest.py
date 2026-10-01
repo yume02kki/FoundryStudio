@@ -1,15 +1,15 @@
-"""UI graph <-> PipelineManifest.yaml.
+"""UI graph <-> pipeline manifest, and the catalog <-> catalog.yaml.
 
-The manifest format is the contract with deploy.py, so the UI never invents fields:
-the graph is the manifest's own sections plus nodes/edges for Transformers and
-Relation. Node positions live in a separate `<Name>.layout.json`.
+The manifest format is the contract with deploy.py, so the UI never invents fields. On
+the canvas, transformers and datasets are both nodes: an edge dataset -> transformer is
+one of the transformer's Inputs, and transformer -> dataset is its Output. Node positions
+live in a separate `<Name>.layout.json`.
 
-Manifests are written in one canonical form: the section order, comments and
-indentation of foundry's PipelineManifest.yaml, transformers and edges in topological
-order (ties broken by name, the way deploy.py orders the graph) and connection keys in
-the order the runtime documents them. Writing is therefore deterministic: rebuilding a
-pipeline by hand yields the same bytes no matter in which order things were dragged and
-wired, and so does deploy.py's render of it.
+Both files are written in one canonical form, the section order, comments and
+indentation of foundry's PipelineManifest.yaml and catalog.yaml, with transformers in
+topological order (ties broken by name, the way deploy.py orders them). Writing is
+therefore deterministic: rebuilding a pipeline by hand yields the same bytes no matter in
+which order things were dragged and wired.
 """
 
 from __future__ import annotations
@@ -18,75 +18,31 @@ from typing import Any
 
 import yaml
 
-SOURCE = "InputSink"
-SINK = "OutputSink"
-SINK_KEYS = ("Type", "Ontology", "Topic", "ConnectionSettings")
-TRANSFORMER_KEYS = ("Repo", "Path", "Ref", "IN", "OUT")
-INTERNAL_KEYS = ("Partitions", "ReplicationFactor", "RetentionMs", "ConnectionSettings")
-CONNECTION_KEYS = ("Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef", "ConsumerGroup")
-TOP_LEVEL = ("Name", "Defaults", "Schemas", SOURCE, SINK, "Transformers", "Relation")
+from .foundry import DATASET, dataset_node
 
-REGISTRY_COMMENT = "# Must be the PipelineDeploys container registry: its CI builds and pushes these images."
-INTERNAL_COMMENT = """\
-# Internal datasets are the topics between transformers. They're generated
-# from Relation and owned by this pipeline: the GitOps watcher creates them
-# and deletes them when they drop out of the graph.
-# Credentials never go here; reference a secret by name with SecretRef."""
-SINKS_COMMENT = """\
-# Sinks are real external systems. They're never generated, created or deleted
-# by the pipeline, and they don't inherit Defaults: their connection is explicit."""
-RELATION_COMMENT = """\
-# Edges of the pipeline graph. One entry may chain several hops.
-# InputSink / OutputSink are the graph's source and sink."""
+TRANSFORMER_KEYS = ("Repo", "Path", "Ref", "IN", "OUT", "Inputs", "Output", "ConsumerGroup")
+CLUSTER_KEYS = ("Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef")
+DATASET_KEYS = ("Cluster", "Schema", "Description")
+TOP_LEVEL = ("Name", "Catalog", "ConsumerGroup", "Transformers")
 
+CATALOG_COMMENT = "# The shared catalog of clusters, schemas and registered topics (datasets)."
+TRANSFORMERS_COMMENT = """\
+# Each transformer reads one or more datasets and writes one or more. IN/OUT are its schemas
+# (transformer.yaml's in/out); they must match the datasets it's wired to.
+# Consumer groups are <ConsumerGroup or Name>.<transformer>."""
 
-# --------------------------------------------------------------------------- #
-# manifest -> graph
-# --------------------------------------------------------------------------- #
-
-def parse_relation(relation) -> list[tuple[str, str]]:
-    edges: list[tuple[str, str]] = []
-    for entry in relation or []:
-        if not isinstance(entry, str) or "->" not in entry:
-            continue
-        hops = [h.strip() for h in entry.split("->")]
-        if all(hops):
-            edges.extend(zip(hops, hops[1:]))
-    return edges
-
-
-def manifest_to_graph(text: str) -> dict:
-    raw = yaml.safe_load(text) or {}
-    if not isinstance(raw, dict):
-        raise ValueError("manifest is not a YAML mapping")
-    nodes: list[dict] = []
-    for node_id, kind in ((SOURCE, "source"), (SINK, "output")):
-        sink = raw.get(node_id) if isinstance(raw.get(node_id), dict) else {}
-        nodes.append({"id": node_id, "kind": kind, "sink": dict(sink)})
-    for name, spec in (raw.get("Transformers") or {}).items():
-        nodes.append({"id": str(name), "kind": "transformer", "transformer": dict(spec or {})})
-
-    ids = {n["id"] for n in nodes}
-    edges, seen, dropped = [], set(), []
-    for u, v in parse_relation(raw.get("Relation")):
-        if u not in ids or v not in ids:
-            dropped.append(f"{u} -> {v}")
-        elif (u, v) not in seen:
-            seen.add((u, v))
-            edges.append({"source": u, "target": v})
-    return {
-        "name": str(raw.get("Name") or ""),
-        "defaults": dict(raw.get("Defaults") or {}),
-        "schemas": {str(k): str(v) for k, v in (raw.get("Schemas") or {}).items()},
-        "nodes": nodes,
-        "edges": edges,
-        "extra": {k: v for k, v in raw.items() if k not in TOP_LEVEL},
-        "warnings": [f"Relation '{e}' refers to a node that doesn't exist; dropped" for e in dropped],
-    }
+CATALOG_HEADER = """\
+# The shared catalog: every Kafka cluster and registered topic pipelines may use.
+# Topics are registered on their cluster by hand; deploy.py only checks they exist and
+# never creates, alters or deletes one. A dataset's name is the topic's real name."""
+CLUSTERS_COMMENT = """\
+# How to reach each cluster. Credentials never go here: SecretRef names a secret,
+# read from FOUNDRY_SECRETS_DIR/<SecretRef>/username and /password."""
+DATASETS_COMMENT = "# Registered topics: the cluster each lives on and the schema it carries."
 
 
 # --------------------------------------------------------------------------- #
-# graph -> manifest
+# YAML helpers
 # --------------------------------------------------------------------------- #
 
 def _blank(v: Any) -> bool:
@@ -114,17 +70,14 @@ def _value_lines(key: str, value: Any, indent: int) -> list[str]:
             lines += _value_lines(k, v, indent + 2)
         return lines
     if isinstance(value, list):
-        if not value:
-            return [f"{pad}{_key(key)}: []"]
+        if all(not isinstance(i, (dict, list)) for i in value):
+            return [f"{pad}{_key(key)}: [{', '.join(_scalar(i) for i in value)}]"]
         lines = [f"{pad}{_key(key)}:"]
         for item in value:
-            if isinstance(item, (dict, list)):
-                dumped = yaml.safe_dump(item, sort_keys=False, default_flow_style=False, allow_unicode=True)
-                first, *rest = dumped.rstrip("\n").splitlines()
-                lines.append(f"{pad}  - {first}")
-                lines += [f"{pad}    {r}" for r in rest]
-            else:
-                lines.append(f"{pad}  - {_scalar(item)}")
+            dumped = yaml.safe_dump(item, sort_keys=False, default_flow_style=False, allow_unicode=True)
+            first, *rest = dumped.rstrip("\n").splitlines()
+            lines.append(f"{pad}  - {first}")
+            lines += [f"{pad}    {r}" for r in rest]
         return lines
     return [f"{pad}{_key(key)}: {_scalar(value)}"]
 
@@ -134,88 +87,159 @@ def _ordered(d: dict, known: tuple[str, ...]) -> list[tuple[str, Any]]:
     return [(k, d[k]) for k in known if k in d] + [(k, v) for k, v in d.items() if k not in known]
 
 
-def _connection(settings: dict) -> dict:
-    return dict(_ordered(settings, CONNECTION_KEYS))
+# --------------------------------------------------------------------------- #
+# manifest -> graph
+# --------------------------------------------------------------------------- #
+
+def _inputs(value) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value] if isinstance(value, list) else []
 
 
-def canonical_order(node_ids: list[str], edges: list[tuple[str, str]]) -> list[str]:
-    """Kahn's algorithm with name-sorted ties (deploy.py's ordering); nodes on a cycle go last."""
-    indeg = {n: 0 for n in node_ids}
-    for u, v in edges:
-        if u in indeg and v in indeg:
-            indeg[v] += 1
-    ready = sorted(n for n, d in indeg.items() if d == 0)
-    order: list[str] = []
+def manifest_to_graph(text: str) -> dict:
+    raw = yaml.safe_load(text) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("manifest is not a YAML mapping")
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    datasets: list[str] = []
+
+    def use(ds: str) -> str:
+        if ds not in datasets:
+            datasets.append(ds)
+        return dataset_node(ds)
+
+    for name, spec in (raw.get("Transformers") or {}).items():
+        spec = dict(spec or {}) if isinstance(spec, dict) else {}
+        inputs, outputs = _inputs(spec.pop("Inputs", None)), _inputs(spec.pop("Output", None))
+        nodes.append({"id": str(name), "kind": "transformer", "transformer": spec})
+        for ds in dict.fromkeys(inputs):
+            edges.append({"source": use(ds), "target": str(name)})
+        for ds in dict.fromkeys(outputs):
+            edges.append({"source": str(name), "target": use(ds)})
+    nodes += [{"id": dataset_node(d), "kind": "dataset", "dataset": d} for d in datasets]
+    return {
+        "name": str(raw.get("Name") or ""),
+        "catalog": str(raw.get("Catalog") or ""),
+        "consumerGroup": str(raw["ConsumerGroup"]) if raw.get("ConsumerGroup") else "",
+        "nodes": nodes,
+        "edges": edges,
+        "extra": {k: v for k, v in raw.items() if k not in TOP_LEVEL},
+        "warnings": [],
+    }
+
+
+# --------------------------------------------------------------------------- #
+# graph -> manifest
+# --------------------------------------------------------------------------- #
+
+def wiring(graph: dict) -> dict[str, dict]:
+    """Each transformer's Inputs and Outputs (the datasets it reads and writes, in name order)."""
+    nodes = {n["id"]: n for n in graph.get("nodes", [])}
+    out: dict[str, dict] = {n["id"]: {"Inputs": [], "Outputs": []}
+                            for n in nodes.values() if n.get("kind") == "transformer"}
+    for e in graph.get("edges", []):
+        s, t = nodes.get(e["source"]), nodes.get(e["target"])
+        if not s or not t:
+            continue
+        if s.get("kind") == "dataset" and t.get("kind") == "transformer":
+            out[t["id"]]["Inputs"].append(s["dataset"])
+        elif s.get("kind") == "transformer" and t.get("kind") == "dataset":
+            out[s["id"]]["Outputs"].append(t["dataset"])
+    for w in out.values():
+        w["Inputs"] = sorted(dict.fromkeys(w["Inputs"]))
+        w["Outputs"] = sorted(dict.fromkeys(w["Outputs"]))
+    return out
+
+
+def canonical_order(wired: dict[str, dict]) -> list[str]:
+    """Kahn's algorithm with name-sorted ties (deploy.py's ordering); transformers on a cycle go last."""
+    feeds = {t: {r for r, rw in wired.items() if set(wired[t]["Outputs"]) & set(rw["Inputs"])} for t in wired}
+    indeg = {t: 0 for t in wired}
+    for rs in feeds.values():
+        for r in rs:
+            indeg[r] += 1
+    ready, order = sorted(t for t, d in indeg.items() if d == 0), []
     while ready:
-        n = ready.pop(0)
-        order.append(n)
-        for v in sorted({v for u, v in edges if u == n and v in indeg}):
-            indeg[v] -= 1
-            if indeg[v] == 0:
-                ready.append(v)
+        t = ready.pop(0)
+        order.append(t)
+        for r in sorted(feeds[t]):
+            indeg[r] -= 1
+            if indeg[r] == 0:
+                ready.append(r)
         ready.sort()
-    return order + sorted(n for n in node_ids if n not in order)
+    return order + sorted(t for t in wired if t not in order)
 
 
 def graph_to_manifest(graph: dict) -> str:
     nodes = {n["id"]: n for n in graph.get("nodes", [])}
-    edges = [(e["source"], e["target"]) for e in graph.get("edges", [])]
-    rank = {n: i for i, n in enumerate(canonical_order(list(nodes), edges))}
-    edges = sorted(dict.fromkeys(edges), key=lambda e: (rank.get(e[0], 1 << 30), rank.get(e[1], 1 << 30), e))
+    wired = wiring(graph)
+    sections: list[list[str]] = [[f"Name: {_scalar(graph.get('name') or '')}"]]
+    if graph.get("catalog"):
+        sections.append([CATALOG_COMMENT, f"Catalog: {_scalar(graph['catalog'])}"])
+    if graph.get("consumerGroup"):
+        sections.append([f"ConsumerGroup: {_scalar(graph['consumerGroup'])}"])
 
-    sections: list[list[str]] = []
-
-    sections.append([f"Name: {_scalar(graph.get('name') or '')}"])
-
-    defaults = {k: v for k, v in (graph.get("defaults") or {}).items() if not _blank(v)}
-    if defaults:
-        lines = ["Defaults:"]
-        for k, v in _ordered(defaults, ("Registry", "InternalDatasets")):
-            if k == "Registry":
-                lines.append(f"  {REGISTRY_COMMENT}")
-                lines += _value_lines(k, v, 2)
-            elif k == "InternalDatasets" and isinstance(v, dict):
-                internal = dict(_ordered(v, INTERNAL_KEYS))
-                if "ConnectionSettings" in internal:
-                    internal["ConnectionSettings"] = _connection(internal["ConnectionSettings"])
-                lines += [f"  {c}" for c in INTERNAL_COMMENT.splitlines()]
-                lines += _value_lines(k, internal, 2)
-            else:
-                lines += _value_lines(k, v, 2)
-        sections.append(lines)
-
-    schemas = graph.get("schemas") or {}
-    if schemas:
-        sections.append(_value_lines("Schemas", dict(schemas), 0))
-
-    for i, (node_id, comment) in enumerate(((SOURCE, SINKS_COMMENT), (SINK, None))):
-        sink = dict(_ordered((nodes.get(node_id) or {}).get("sink") or {}, SINK_KEYS))
-        if "ConnectionSettings" in sink:
-            sink["ConnectionSettings"] = _connection(sink["ConnectionSettings"])
-        lines = comment.splitlines() if comment else []
-        lines += _value_lines(node_id, sink, 0) if sink else [f"{node_id}: {{}}"]
-        sections.append(lines)
-
-    transformers = sorted(
-        (n for n in nodes.values() if n.get("kind") == "transformer"), key=lambda n: rank.get(n["id"], 1 << 30)
-    )
-    if transformers:
-        lines = ["Transformers:"]
-        for j, t in enumerate(transformers):
+    order = canonical_order(wired)
+    if order:
+        lines = TRANSFORMERS_COMMENT.splitlines() + ["Transformers:"]
+        for j, t in enumerate(order):
             if j:
                 lines.append("")
-            spec = dict(_ordered(t.get("transformer") or {}, TRANSFORMER_KEYS))
-            if "Path" in spec:
-                spec["Path"] = str(spec["Path"]).strip("/") or None
-                spec = {k: v for k, v in spec.items() if v is not None}
-            lines += _value_lines(t["id"], spec, 2) if spec else [f"  {_key(t['id'])}: {{}}"]
+            spec = {k: v for k, v in (nodes[t].get("transformer") or {}).items() if k not in ("Inputs", "Output")}
+            if "Path" in spec and spec["Path"] is not None:
+                spec["Path"] = str(spec["Path"]).strip("/")
+            outputs = wired[t]["Outputs"]
+            # One output is written as a plain name (the common case), several as a list.
+            spec.update(Inputs=wired[t]["Inputs"], Output=outputs[0] if len(outputs) == 1 else outputs)
+            spec = dict(_ordered(spec, TRANSFORMER_KEYS))
+            lines += _value_lines(t, spec, 2) if spec else [f"  {_key(t)}: {{}}"]
         sections.append(lines)
 
     for k, v in (graph.get("extra") or {}).items():
         if k not in TOP_LEVEL:
             sections.append(_value_lines(k, v, 0))
-
-    if edges:
-        sections.append(RELATION_COMMENT.splitlines() + ["Relation:"] + [f"  - {u} -> {v}" for u, v in edges])
-
     return "\n\n".join("\n".join(s) for s in sections) + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# catalog
+# --------------------------------------------------------------------------- #
+
+def parse_catalog(text: str) -> dict:
+    raw = yaml.safe_load(text) or {}
+    if not isinstance(raw, dict):
+        raise ValueError("catalog is not a YAML mapping")
+
+    def mapping(v) -> dict:
+        return {str(k): (dict(x) if isinstance(x, dict) else x) for k, x in (v or {}).items()} if isinstance(v, dict) else {}
+
+    return {
+        "clusters": {k: {str(a): b for a, b in (v or {}).items()} for k, v in mapping(raw.get("Clusters")).items()},
+        "schemas": {k: str(v) for k, v in mapping(raw.get("Schemas")).items()},
+        "datasets": {k: dict(v or {}) for k, v in mapping(raw.get("Datasets")).items()},
+        "extra": {k: v for k, v in raw.items() if k not in ("Clusters", "Schemas", "Datasets")},
+    }
+
+
+def catalog_to_yaml(catalog: dict) -> str:
+    sections: list[list[str]] = [CATALOG_HEADER.splitlines()]
+    clusters = catalog.get("clusters") or {}
+    lines = CLUSTERS_COMMENT.splitlines() + (["Clusters:"] if clusters else ["Clusters: {}"])
+    for name, settings in clusters.items():
+        lines += _value_lines(name, dict(_ordered(settings or {}, CLUSTER_KEYS)), 2)
+    sections.append(lines)
+    sections.append(_value_lines("Schemas", dict(catalog.get("schemas") or {}), 0))
+    datasets = catalog.get("datasets") or {}
+    lines = DATASETS_COMMENT.splitlines() + (["Datasets:"] if datasets else ["Datasets: {}"])
+    for name, spec in datasets.items():
+        lines += _value_lines(name, dict(_ordered(spec or {}, DATASET_KEYS)), 2)
+    sections.append(lines)
+    for k, v in (catalog.get("extra") or {}).items():
+        sections.append(_value_lines(k, v, 0))
+    return "\n\n".join("\n".join(s) for s in sections) + "\n"
+
+
+def is_dataset(node_id: str) -> bool:
+    return node_id.startswith(DATASET)

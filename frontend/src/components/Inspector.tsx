@@ -1,14 +1,14 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { emits } from "../lib/rules";
-import { writerKey } from "../lib/stages";
+import { inputsOf, outputsOf } from "../lib/rules";
+import { edgeDataset } from "../lib/stages";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, headVersion, versionFor } from "../lib/versions";
 import { issuesFor, NAME_RE, useStudio } from "../store";
-import { SINK, SOURCE, type ConnectionSettings, type GraphNode, type Issue } from "../types";
+import { datasetName, isDatasetNode, type ConnectionSettings, type GraphNode, type Issue } from "../types";
 
-// Keys the transformer runtime understands (deploy.py's CONNECTION_KEYS). Keys with a
-// "." go to librdkafka verbatim. There is deliberately no password field: credentials
-// are referenced by name through SecretRef.
+// Keys a catalog cluster takes (deploy.py's CLUSTER_KEYS). Keys with a "." go to
+// librdkafka verbatim. There is deliberately no password field: credentials are
+// referenced by name through SecretRef.
 const PROTOCOLS = ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"];
 const MECHANISMS = ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "OAUTHBEARER", "GSSAPI"];
 
@@ -84,7 +84,15 @@ function Issues({ issues }: { issues: Issue[] }) {
   );
 }
 
-function ConnectionEditor({
+function SchemaChip({ schema }: { schema: string | undefined | null }) {
+  return (
+    <span className="schema-chip" style={{ color: schemaColor(schema), borderColor: schemaColor(schema) }}>
+      {schema ?? "?"}
+    </span>
+  );
+}
+
+export function ConnectionEditor({
   value,
   onChange,
   prefix,
@@ -100,9 +108,7 @@ function ConnectionEditor({
     else next[key] = v;
     onChange(next);
   };
-  const extra = Object.keys(settings).filter(
-    (k) => !["Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef", "ConsumerGroup"].includes(k),
-  );
+  const extra = Object.keys(settings).filter((k) => !["Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef"].includes(k));
   const [newKey, setNewKey] = useState("");
   const str = (k: string) => (settings[k] === undefined ? undefined : String(settings[k]));
 
@@ -117,11 +123,8 @@ function ConnectionEditor({
       <Field label="SaslMechanism">
         <Select value={str("SaslMechanism")} options={MECHANISMS} onChange={(v) => set("SaslMechanism", v)} testId={`${prefix}-mechanism`} />
       </Field>
-      <Field label="SecretRef" hint="Name of the secret holding the credentials. Credentials themselves never go in the manifest.">
+      <Field label="SecretRef" hint="Name of the secret holding the credentials. Credentials themselves never go in the catalog.">
         <TextInput value={str("SecretRef")} onChange={(v) => set("SecretRef", v)} placeholder="secret name" testId={`${prefix}-secretref`} />
-      </Field>
-      <Field label="ConsumerGroup">
-        <TextInput value={str("ConsumerGroup")} onChange={(v) => set("ConsumerGroup", v)} testId={`${prefix}-group`} />
       </Field>
       {extra.map((k) => (
         <Field key={k} label={k} hint="Passed to librdkafka verbatim">
@@ -134,11 +137,7 @@ function ConnectionEditor({
         </Field>
       ))}
       <div className="add-key">
-        <input
-          placeholder="librdkafka key, e.g. socket.timeout.ms"
-          value={newKey}
-          onChange={(e) => setNewKey(e.target.value.trim())}
-        />
+        <input placeholder="librdkafka key, e.g. socket.timeout.ms" value={newKey} onChange={(e) => setNewKey(e.target.value.trim())} />
         <button
           disabled={!newKey || newKey in settings}
           title="Keys containing '.' are passed to librdkafka; deploy.py rejects other unknown keys"
@@ -154,34 +153,26 @@ function ConnectionEditor({
   );
 }
 
-function SinkInspector({ node }: { node: GraphNode }) {
-  const updateSpec = useStudio((s) => s.updateSpec);
-  const schemaMap = useStudio((s) => s.meta?.schemas);
-  const schemas = Object.keys(schemaMap ?? {});
-  const validation = useStudio((s) => s.validation);
-  const sink = node.sink ?? {};
-  const update = (patch: Record<string, unknown>) =>
-    updateSpec(node.id, (n) => ({ ...n, sink: { ...(n.sink ?? {}), ...patch } }));
-  const prefix = node.id === SOURCE ? "source" : "output";
-
+/** A catalog cluster's connection settings, shared by every dataset on it. */
+function ClusterSettings({ cluster, prefix }: { cluster: string | undefined; prefix: string }) {
+  const catalog = useStudio((s) => s.catalog);
+  const updateCatalog = useStudio((s) => s.updateCatalog);
+  if (!cluster) return null;
+  if (!catalog?.clusters[cluster]) return <div className="issue">Cluster {cluster} isn't in the catalog.</div>;
+  const shared = Object.values(catalog.datasets).filter((d) => d.Cluster === cluster).length;
   return (
     <>
-      <h3>
-        {node.id === SOURCE ? "Source" : "Output"} <span className="muted">· {node.id}</span>
-      </h3>
-      <p className="note">External system: connected to, never created or deleted by the pipeline. Doesn't inherit Defaults.</p>
-      <Issues issues={issuesFor(validation, node.id)} />
-      <Field label="Type">
-        <Select value={sink.Type ?? "Kafka"} options={["Kafka"]} onChange={(v) => update({ Type: v })} allowEmpty={false} />
-      </Field>
-      <Field label="Topic">
-        <TextInput value={sink.Topic} onChange={(v) => update({ Topic: v })} testId={`${prefix}-topic`} />
-      </Field>
-      <Field label="Ontology">
-        <Select value={sink.Ontology} options={schemas} onChange={(v) => update({ Ontology: v })} testId={`${prefix}-ontology`} />
-      </Field>
-      <h4>Connection settings</h4>
-      <ConnectionEditor value={sink.ConnectionSettings} onChange={(v) => update({ ConnectionSettings: v })} prefix={prefix} />
+      <h4>
+        Cluster <span className="mono">{cluster}</span>
+      </h4>
+      <p className="note">
+        Kafka connection settings from the shared catalog{shared > 1 ? `, used by ${shared} datasets` : ""}. Saved with Save.
+      </p>
+      <ConnectionEditor
+        value={catalog.clusters[cluster]}
+        onChange={(v) => updateCatalog((c) => ({ ...c, clusters: { ...c.clusters, [cluster]: v } }))}
+        prefix={prefix}
+      />
     </>
   );
 }
@@ -191,9 +182,15 @@ function TransformerInspector({ node }: { node: GraphNode }) {
   const renameNode = useStudio((s) => s.renameNode);
   const transformers = useStudio((s) => s.transformers);
   const validation = useStudio((s) => s.validation);
+  const graph = useStudio((s) => s.graph);
+  const meta = useStudio((s) => s.meta);
+  useStudio((s) => s.revision); // re-render on wiring changes
   const spec = node.transformer ?? {};
   const info = findInfo(spec, Object.values(transformers));
   const version = versionFor(info, spec.Ref);
+  const reads = inputsOf(graph(), node.id);
+  const writes = outputsOf(graph(), node.id);
+  const groupPrefix = meta?.consumerGroup || meta?.name || "<pipeline>";
   const [name, setName] = useState(node.id);
   const [nameError, setNameError] = useState<string | null>(null);
   useEffect(() => setName(node.id), [node.id]);
@@ -264,15 +261,37 @@ function TransformerInspector({ node }: { node: GraphNode }) {
         )}
       </Field>
       <Field label="In">
-        <span className="schema-chip" style={{ color: schemaColor(spec.IN), borderColor: schemaColor(spec.IN) }}>
-          {spec.IN ?? "?"}
-        </span>
+        <SchemaChip schema={spec.IN} />
       </Field>
       <Field label="Out">
-        <span className="schema-chip" style={{ color: schemaColor(spec.OUT), borderColor: schemaColor(spec.OUT) }}>
-          {spec.OUT ?? "?"}
+        <SchemaChip schema={spec.OUT} />
+      </Field>
+      <Field label="Reads">
+        <span className="mono" data-testid="transformer-reads">
+          {reads.join(", ") || "—"}
         </span>
       </Field>
+      <Field label="Writes">
+        <span className="mono" data-testid="transformer-writes">
+          {writes.join(", ") || "—"}
+        </span>
+      </Field>
+      <Field label="ConsumerGroup" hint="Prefix of this transformer's consumer group; the runtime appends .<transformer>">
+        <TextInput
+          value={spec.ConsumerGroup}
+          placeholder={groupPrefix}
+          onChange={(v) =>
+            updateSpec(node.id, (n) => {
+              const { ConsumerGroup: _old, ...rest } = n.transformer ?? {};
+              return { ...n, transformer: v ? { ...rest, ConsumerGroup: v } : rest };
+            })
+          }
+          testId="transformer-group"
+        />
+      </Field>
+      <p className="note">
+        Consumer group <span className="mono">{`${spec.ConsumerGroup || groupPrefix}.${node.id}`}</span>
+      </p>
       {typesDiffer && (
         <div className="issue warn">
           This version declares {version.input ?? "?"} → {version.output ?? "?"}; the manifest says {spec.IN} → {spec.OUT}.
@@ -295,76 +314,122 @@ function TransformerInspector({ node }: { node: GraphNode }) {
   );
 }
 
-/**
- * A connection is a Kafka topic: the one its source node writes (deploy.py's endpoint_id).
- * Its connection settings live where the manifest keeps them: on the sink for InputSink /
- * OutputSink topics, and in Defaults.InternalDatasets for the topics between transformers,
- * which all internal topics share.
- */
-function EdgeInspector({ id }: { id: string }) {
+function DatasetInspector({ node }: { node: GraphNode }) {
+  const name = node.dataset ?? datasetName(node.id);
+  const catalog = useStudio((s) => s.catalog);
+  const updateCatalog = useStudio((s) => s.updateCatalog);
   const validation = useStudio((s) => s.validation);
-  const [source, target] = id.split("->");
-  const nodes = useStudio((s) => s.nodes);
-  const edges = useStudio((s) => s.edges);
-  const meta = useStudio((s) => s.meta);
-  const updateSpec = useStudio((s) => s.updateSpec);
-  const updateMeta = useStudio((s) => s.updateMeta);
-  const graph = { nodes: nodes.map((n) => n.data.spec), edges: edges.map((e) => ({ source: e.source, target: e.target })) };
-  const writer = writerKey(graph, source);
-  const schema = emits(nodes.find((n) => n.id === source)?.data.spec);
-  const external = writer === SOURCE || writer === SINK;
-  const sink = external ? nodes.find((n) => n.id === writer)?.data.spec.sink : undefined;
-  const internal = meta?.defaults.InternalDatasets ?? {};
-  const internalEdges = graph.edges.filter((e) => e.source !== SOURCE && writerKey(graph, e.source) !== SINK).length;
-  const sinkEdges = graph.edges.filter((e) => writerKey(graph, e.source) === writer).length;
-
-  const settings = external ? sink?.ConnectionSettings : internal.ConnectionSettings;
-  const setSettings = (v: ConnectionSettings) =>
-    external
-      ? updateSpec(writer, (n) => ({ ...n, sink: { ...(n.sink ?? {}), ConnectionSettings: v } }))
-      : updateMeta((m) => ({
-          ...m,
-          defaults: { ...m.defaults, InternalDatasets: { ...(m.defaults.InternalDatasets ?? {}), ConnectionSettings: v } },
-        }));
+  const graph = useStudio((s) => s.graph);
+  useStudio((s) => s.revision);
+  const spec = catalog?.datasets[name];
+  const clusters = Object.keys(catalog?.clusters ?? {});
+  const schemas = Object.keys(catalog?.schemas ?? {});
+  const info = spec?.Schema ? catalog?.schemaInfo?.[spec.Schema] : undefined;
+  const g = graph();
+  const transformers = g.nodes.filter((n) => n.kind === "transformer").map((n) => n.id);
+  const writers = transformers.filter((t) => outputsOf(g, t).includes(name));
+  const readers = transformers.filter((t) => inputsOf(g, t).includes(name));
+  const set = (patch: Record<string, string>) =>
+    updateCatalog((c) => {
+      const next: Record<string, unknown> = { ...(c.datasets[name] ?? {}), ...patch };
+      for (const k of Object.keys(patch)) if (!patch[k]) delete next[k];
+      return { ...c, datasets: { ...c.datasets, [name]: next } };
+    });
 
   return (
     <>
       <h3>
-        Connection <span className="muted">· {source} → {target}</span>
+        Dataset <span className="muted mono">· {name}</span>
+      </h3>
+      <Issues issues={issuesFor(validation, node.id)} />
+      <p className="note">
+        A registered Kafka topic from the shared catalog. Pipelines read and write it; deploy.py never creates or deletes it.
+      </p>
+      {!spec && (
+        <div className="issue" data-testid="dataset-missing">
+          {name} isn't in the catalog. Pick its cluster and schema to add it.
+        </div>
+      )}
+      <Field label="Topic">
+        <input value={name} readOnly className="mono" data-testid="dataset-topic" />
+      </Field>
+      <Field label="Cluster">
+        <Select value={spec?.Cluster} options={clusters} onChange={(v) => set({ Cluster: v })} testId="dataset-cluster" />
+      </Field>
+      <Field label="Schema" hint="Shared by every pipeline using this topic">
+        <Select value={spec?.Schema} options={schemas} onChange={(v) => set({ Schema: v })} testId="dataset-schema" />
+      </Field>
+      <Field label="Description">
+        <TextInput value={spec?.Description} onChange={(v) => set({ Description: v })} testId="dataset-description" />
+      </Field>
+      {info && (
+        <div className="schema-fields" data-testid="dataset-fields">
+          <div className="muted">
+            {spec?.Schema}: {info.format ?? "?"} · {info.file}
+          </div>
+          <table>
+            <tbody>
+              {Object.entries(info.fields).map(([f, t]) => (
+                <tr key={f}>
+                  <td className="mono">{f}</td>
+                  <td className="muted">{t}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <Field label="Written by">
+        <span className="mono">{writers.join(", ") || "outside this pipeline"}</span>
+      </Field>
+      <Field label="Read by">
+        <span className="mono">{readers.join(", ") || "outside this pipeline"}</span>
+      </Field>
+      <ClusterSettings cluster={spec?.Cluster} prefix="dataset" />
+    </>
+  );
+}
+
+/**
+ * A connection is a transformer reading or writing a dataset. Its Kafka settings are the
+ * dataset's cluster's, from the shared catalog.
+ */
+function EdgeInspector({ id }: { id: string }) {
+  const validation = useStudio((s) => s.validation);
+  const edge = useStudio((s) => s.edges.find((e) => e.id === id));
+  const catalog = useStudio((s) => s.catalog);
+  const meta = useStudio((s) => s.meta);
+  const nodes = useStudio((s) => s.nodes);
+  if (!edge) return null;
+  const { source, target } = edge;
+  const name = edgeDataset(source, target);
+  const reading = isDatasetNode(source);
+  const transformer = reading ? target : source;
+  const spec = catalog?.datasets[name];
+  const tSpec = nodes.find((n) => n.id === transformer)?.data.spec.transformer;
+  const group = `${tSpec?.ConsumerGroup || meta?.consumerGroup || meta?.name || "<pipeline>"}.${transformer}`;
+
+  return (
+    <>
+      <h3>
+        Connection{" "}
+        <span className="muted">
+          · {transformer} {reading ? "reads" : "writes"} {name}
+        </span>
       </h3>
       <Issues issues={issuesFor(validation, undefined, [source, target])} />
-      <Field label="Carries">
-        <span className="schema-chip" style={{ color: schemaColor(schema), borderColor: schemaColor(schema) }}>
-          {schema ?? "?"}
-        </span>
+      <Field label="Topic">
+        <input value={name} readOnly className="mono" data-testid="edge-topic" />
       </Field>
-      {external ? (
-        <>
-          <Field label="Topic">
-            <TextInput
-              value={sink?.Topic}
-              onChange={(v) => updateSpec(writer, (n) => ({ ...n, sink: { ...(n.sink ?? {}), Topic: v } }))}
-              testId="edge-topic"
-            />
-          </Field>
-          <p className="note">
-            {writer === SOURCE ? "Source" : "Output"} topic: an external system.
-            {sinkEdges > 1 ? ` These settings are ${writer}'s, shared by its ${sinkEdges} connections.` : ` These settings are ${writer}'s.`}
-          </p>
-        </>
-      ) : (
-        <>
-          <Field label="Topic" hint="Generated by deploy.py from the graph">
-            <input value={`${meta?.name || "<Pipeline>"}.${source}.out`} readOnly data-testid="edge-topic" />
-          </Field>
-          <p className="note">
-            Internal topic between transformers. Connection settings are shared by all internal topics in this pipeline
-            {internalEdges > 1 ? ` (${internalEdges} connections)` : ""}.
-          </p>
-        </>
+      <Field label="Carries">
+        <SchemaChip schema={spec?.Schema} />
+      </Field>
+      {reading && (
+        <Field label="Consumer group" hint="<ConsumerGroup or pipeline Name>.<transformer>">
+          <input value={group} readOnly className="mono" data-testid="edge-group" />
+        </Field>
       )}
-      <h4>Kafka connection settings</h4>
-      <ConnectionEditor value={settings} onChange={setSettings} prefix="edge" />
+      <ClusterSettings cluster={spec?.Cluster} prefix="edge" />
     </>
   );
 }
@@ -386,7 +451,7 @@ export function Inspector() {
   let body: ReactNode;
   if (selectedNode) {
     const spec = selectedNode.data.spec;
-    body = spec.id === SOURCE || spec.id === SINK ? <SinkInspector key={spec.id} node={spec} /> : <TransformerInspector key={spec.id} node={spec} />;
+    body = spec.kind === "dataset" ? <DatasetInspector key={spec.id} node={spec} /> : <TransformerInspector key={spec.id} node={spec} />;
   } else if (selectedEdge) {
     body = <EdgeInspector id={selectedEdge.id} />;
   } else {

@@ -1,13 +1,16 @@
 """Real-time watching of GitLab: webhooks when GitLab can reach us, polling otherwise.
 
+Which projects: every project the token's user is a member of (re-listed every
+`discovery_interval` seconds, so new projects show up on their own), or a fixed list
+(STUDIO_TRANSFORMER_PROJECTS). Any folder with a transformer.yaml in any of them is a
+transformer.
+
 Polling (every `poll_interval` seconds) reads each project's events API, plus
 `last_activity_at` (which GitLab only refreshes about once an hour, so it's a backstop,
 not the signal). A push or tag event on a transformer project triggers a rescan; the
 rescan is diffed against the previous one and the differences go to the browser:
 
     transformer.added / transformer.updated (newVersions) / transformer.removed
-    mr.updated        latest PipelineDeploys merge request and its CI status
-    pipelines.changed PipelineDeploys' default branch moved
     watcher.status    mode, last poll, last error
 """
 
@@ -47,29 +50,23 @@ class EventBus:
         return len(self._subscribers)
 
 
-def _mr_view(mr: dict) -> dict:
-    pipeline = mr.get("head_pipeline") or {}
-    return {
-        "iid": mr["iid"], "title": mr.get("title"), "state": mr.get("state"), "webUrl": mr.get("web_url"),
-        "sourceBranch": mr.get("source_branch"), "createdAt": mr.get("created_at"),
-        "pipeline": {"status": pipeline.get("status"), "webUrl": pipeline.get("web_url")} if pipeline else None,
-    }
-
-
 class Watcher:
-    def __init__(self, gitlab: GitLab, discovery: Discovery, bus: EventBus, transformer_projects: list[str],
-                 deploys_project: str, poll_interval: float = 10.0, full_rescan_interval: float = 300.0):
+    def __init__(self, gitlab: GitLab, discovery: Discovery, bus: EventBus, transformer_projects: list[str] | None,
+                 poll_interval: float = 10.0, full_rescan_interval: float = 300.0, discovery_interval: float = 60.0):
         self.gitlab = gitlab
         self.discovery = discovery
         self.bus = bus
-        self.transformer_projects = list(transformer_projects)
-        self.deploys_project = deploys_project
+        # None: every project the user is a member of.
+        self.fixed_projects = list(transformer_projects) if transformer_projects else None
+        self.transformer_projects = list(self.fixed_projects or [])
         self.poll_interval = poll_interval
         self.full_rescan_interval = full_rescan_interval
+        self.discovery_interval = discovery_interval
+        self._last_listing: float | None = None
+        self._gate = asyncio.Semaphore(6)  # projects scanned at once
+        self._listed_activity: dict[str, str] = {}
 
         self.transformers: dict[str, TransformerInfo] = {}
-        self.latest_mr: dict | None = None
-        self.deploys_head: str | None = None
         self.errors: dict[str, str] = {}
         self.last_poll: float | None = None
         self.last_webhook: float | None = None
@@ -104,13 +101,45 @@ class Watcher:
                 log.exception("poll failed")
 
     async def initial_scan(self) -> None:
-        for project in self.transformer_projects:
-            await self._guard(project, self._prime(project), rescan=True)
-        await self._guard(self.deploys_project, self._prime(self.deploys_project), rescan=False)
-        await self._guard(self.deploys_project, self.refresh_merge_requests(), rescan=False)
-        await self._guard(self.deploys_project, self._refresh_deploys_head(), rescan=False)
+        if self.fixed_projects is None:
+            await self.refresh_projects(scan=False)
+        await asyncio.gather(*(self._guard(p, self._prime(p), rescan=True) for p in self.transformer_projects))
         self.ready.set()
         self._status()
+
+    @property
+    def projects_with_transformers(self) -> list[str]:
+        return sorted({t.project for t in self.transformers.values()})
+
+    async def refresh_projects(self, scan: bool = True) -> None:
+        """Every member project: scan new ones, rescan ones with new activity, forget deleted ones."""
+        try:
+            listed = await self.gitlab.list_projects()
+            self.errors.pop("projects", None)
+        except Exception as e:
+            log.warning("listing projects: %s", e)
+            self.errors["projects"] = str(e)
+            return
+        self._last_listing = time.monotonic()
+        activity = {p["path_with_namespace"]: p.get("last_activity_at") or "" for p in listed}
+        new = [p for p in activity if p not in self.transformer_projects]
+        changed = [p for p in activity if p in self.transformer_projects
+                   and activity[p] != self._listed_activity.get(p)]
+        gone = [p for p in self.transformer_projects if p not in activity]
+        self.transformer_projects = sorted(activity)
+        self._listed_activity = activity
+        for project in gone:
+            self._forget(project)
+        if scan:
+            await asyncio.gather(*(self._guard(p, self._prime(p), rescan=True) for p in new),
+                                 *(self._guard(p, self.rescan(p), rescan=False) for p in changed))
+
+    def _forget(self, project: str) -> None:
+        for tid in [k for k, v in self.transformers.items() if v.project == project]:
+            gone = self.transformers.pop(tid)
+            self.bus.publish({"type": "transformer.removed", "id": tid, "name": gone.name})
+        for d in (self._last_event, self._last_activity, self._last_full, self.errors):
+            d.pop(project, None)
 
     async def _guard(self, project: str, coro, rescan: bool) -> bool:
         try:
@@ -125,10 +154,11 @@ class Watcher:
             return False
 
     async def _prime(self, project: str) -> None:
-        events = await self.gitlab.list_events(project)
-        self._last_event[project] = max((e["id"] for e in events), default=0)
-        self._last_activity[project] = (await self.gitlab.get_project(project)).get("last_activity_at") or ""
-        self._last_full[project] = time.monotonic()
+        async with self._gate:
+            events = await self.gitlab.list_events(project)
+            self._last_event[project] = max((e["id"] for e in events), default=0)
+            self._last_activity[project] = (await self.gitlab.get_project(project)).get("last_activity_at") or ""
+            self._last_full[project] = time.monotonic()
 
     def _status(self) -> None:
         self.bus.publish({"type": "watcher.status", "status": self.status()})
@@ -141,6 +171,8 @@ class Watcher:
             "lastWebhook": self.last_webhook,
             "errors": self.errors,
             "projects": self.transformer_projects,
+            "scope": "fixed" if self.fixed_projects is not None else "membership",
+            "withTransformers": self.projects_with_transformers,
             "ready": self.ready.is_set(),
         }
 
@@ -161,21 +193,24 @@ class Watcher:
         return changed
 
     async def poll_once(self) -> None:
+        auto = self.fixed_projects is None
+        if auto and (self._last_listing is None or time.monotonic() - self._last_listing >= self.discovery_interval):
+            await self.refresh_projects()
+        with_transformers = set(self.projects_with_transformers)
         for project in self.transformer_projects:
             async def check(project=project):
+                stale = time.monotonic() - self._last_full.get(project, 0) > self.full_rescan_interval
+                # With every member project watched, only those that have transformers are polled for
+                # pushes; the others are caught by the project listing's activity and the periodic rescan.
+                if auto and project not in with_transformers:
+                    if stale:
+                        await self.rescan(project)
+                    return
                 pushes = await self._new_push_events(project)
                 activity = await self._activity_changed(project)
-                stale = time.monotonic() - self._last_full.get(project, 0) > self.full_rescan_interval
                 if pushes or activity or stale:
                     await self.rescan(project)
             await self._guard(project, check(), rescan=False)
-
-        async def deploys():
-            pushes = await self._new_push_events(self.deploys_project)
-            if pushes or await self._activity_changed(self.deploys_project):
-                await self._refresh_deploys_head()
-            await self.refresh_merge_requests()
-        await self._guard(self.deploys_project, deploys(), rescan=False)
         self.last_poll = time.time()
         self._status()
 
@@ -185,21 +220,20 @@ class Watcher:
         self.last_webhook = time.time()
         project = ((payload.get("project") or {}).get("path_with_namespace")
                    or payload.get("project_path_with_namespace") or "")
-        if project.lower() in (p.lower() for p in self.transformer_projects) and kind in ("Push Hook", "Tag Push Hook"):
-            project = next(p for p in self.transformer_projects if p.lower() == project.lower())
-            await self._guard(project, self.rescan(project), rescan=False)
-        elif project.lower() == self.deploys_project.lower():
-            if kind == "Push Hook":
-                await self._guard(project, self._refresh_deploys_head(), rescan=False)
-            if kind in ("Merge Request Hook", "Pipeline Hook", "Push Hook"):
-                await self._guard(project, self.refresh_merge_requests(), rescan=False)
+        known = next((p for p in self.transformer_projects if p.lower() == project.lower()), None)
+        if kind in ("Push Hook", "Tag Push Hook") and project:
+            if known:
+                await self._guard(known, self.rescan(known), rescan=False)
+            elif self.fixed_projects is None:
+                # A group or system hook for a project we haven't listed yet: it's new.
+                await self.refresh_projects()
         self._status()
 
     # -- state changes ------------------------------------------------------------------ #
 
     async def rescan(self, project: str) -> None:
         lock = self._locks.setdefault(project, asyncio.Lock())
-        async with lock:
+        async with lock, self._gate:
             found = await self.discovery.scan_project(project)
             self._last_full[project] = time.monotonic()
             old = {k: v for k, v in self.transformers.items() if v.project == project}
@@ -217,22 +251,3 @@ class Watcher:
             for tid in old.keys() - found.keys():
                 gone = self.transformers.pop(tid)
                 self.bus.publish({"type": "transformer.removed", "id": tid, "name": gone.name})
-
-    async def refresh_merge_requests(self) -> None:
-        mrs = await self.gitlab.list_merge_requests(self.deploys_project, limit=5)
-        deploy_mrs = [m for m in mrs if str(m.get("source_branch", "")).startswith("deploy/")] or mrs
-        if not deploy_mrs:
-            return
-        latest = max(deploy_mrs, key=lambda m: m["iid"])
-        detail = _mr_view(await self.gitlab.get_merge_request(self.deploys_project, latest["iid"]))
-        if detail != self.latest_mr:
-            self.latest_mr = detail
-            self.bus.publish({"type": "mr.updated", "mr": detail})
-
-    async def _refresh_deploys_head(self) -> None:
-        proj = await self.gitlab.get_project(self.deploys_project)
-        head = await self.gitlab.get_commit(self.deploys_project, proj["default_branch"])
-        sha = head["id"] if head else None
-        if self.deploys_head is not None and sha != self.deploys_head:
-            self.bus.publish({"type": "pipelines.changed", "head": sha})
-        self.deploys_head = sha

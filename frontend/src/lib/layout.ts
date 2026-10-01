@@ -1,6 +1,6 @@
-import { SINK, SOURCE, type GraphEdge, type GraphNode, type Layout } from "../types";
+import type { GraphEdge, GraphNode, Layout } from "../types";
 
-export const COLUMN = 380;
+export const COLUMN = 300;
 export const ROW = 130;
 
 /** Layered left-to-right layout for pipelines without a <Name>.layout.json. */
@@ -18,10 +18,6 @@ export function autoLayout(nodes: GraphNode[], edges: GraphEdge[]): Layout["posi
     }
     if (!changed) break;
   }
-  const max = Math.max(1, ...[...rank.entries()].filter(([id]) => id !== SINK).map(([, r]) => r + 1));
-  rank.set(SOURCE, 0);
-  rank.set(SINK, max);
-
   const columns = new Map<number, string[]>();
   for (const n of nodes) {
     const r = rank.get(n.id) ?? 0;

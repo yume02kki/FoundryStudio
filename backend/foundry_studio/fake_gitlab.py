@@ -3,20 +3,16 @@
 Used by the tests and by the offline demo (`STUDIO_FAKE_GITLAB=demo`). Every project is
 a normal git repository at `<root>/<namespace>/<name>`. Events are synthesised by
 diffing the repository's refs between calls, so committing or tagging in one of those
-repos behaves like pushing to GitLab. Merge requests live in `<repo>.mrs.json`.
+repos behaves like pushing to GitLab.
 """
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import subprocess
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-
-CI_SECONDS = 15  # simulated pipeline duration for merge requests without an explicit status
 
 
 def _now() -> str:
@@ -57,13 +53,6 @@ class FakeGitLab:
     def _snapshot(self, project: str) -> dict[str, str]:
         out = self._git(project, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads", "refs/tags")
         return dict(line.split("\0") for line in out.splitlines() if line)
-
-    def _mrs_path(self, project: str) -> Path:
-        return self.root / f"{project}.mrs.json"
-
-    def _load_mrs(self, project: str) -> list[dict]:
-        p = self._mrs_path(project)
-        return json.loads(p.read_text()) if p.is_file() else []
 
     # -- sync implementations ----------------------------------------------------------- #
 
@@ -149,51 +138,18 @@ class FakeGitLab:
                 })
         return events[:50]
 
-    def merge_requests_sync(self, project: str, limit: int = 5) -> list[dict]:
-        mrs = sorted(self._load_mrs(project), key=lambda m: m["iid"], reverse=True)
-        return [self._mr_view(project, m) for m in mrs[:limit]]
-
-    def merge_request_sync(self, project: str, iid: int) -> dict:
-        for m in self._load_mrs(project):
-            if m["iid"] == iid:
-                return self._mr_view(project, m)
-        from .gitlab import GitLabError
-
-        raise GitLabError(404, "merge request not found")
-
-    def _mr_view(self, project: str, m: dict) -> dict:
-        status = m.get("pipeline_status")
-        if status is None:
-            status = "running" if time.time() - m["created_ts"] < m.get("ci_seconds", CI_SECONDS) else "success"
-        web = f"{self.web_base}/{project}/-/merge_requests/{m['iid']}"
-        return {
-            "iid": m["iid"], "title": m["title"], "state": m.get("state", "opened"),
-            "source_branch": m["source_branch"], "target_branch": m["target_branch"],
-            "created_at": m["created_at"], "updated_at": m.get("updated_at", m["created_at"]),
-            "web_url": web, "description": m.get("description", ""),
-            "head_pipeline": {"id": m["iid"] * 100, "status": status, "web_url": f"{web}/pipelines"},
-        }
-
-    def create_merge_request(self, project: str, source: str, target: str, title: str, description: str = "") -> dict:
-        mrs = self._load_mrs(project)
-        mr = {
-            "iid": max((m["iid"] for m in mrs), default=0) + 1, "title": title, "description": description,
-            "source_branch": source, "target_branch": target, "state": "opened",
-            "created_at": _now(), "created_ts": time.time(),
-        }
-        mrs.append(mr)
-        self._mrs_path(project).write_text(json.dumps(mrs, indent=2))
-        return self._mr_view(project, mr)
-
-    def set_pipeline_status(self, project: str, iid: int, status: str | None) -> None:
-        mrs = self._load_mrs(project)
-        for m in mrs:
-            if m["iid"] == iid:
-                m["pipeline_status"] = status
-                m["updated_at"] = _now()
-        self._mrs_path(project).write_text(json.dumps(mrs, indent=2))
+    def projects_sync(self) -> list[dict]:
+        out = []
+        for ns in sorted(p for p in self.root.iterdir() if p.is_dir()) if self.root.is_dir() else []:
+            for repo in sorted(p for p in ns.iterdir() if p.is_dir()):
+                if (repo / ".git").exists() or (repo / "HEAD").is_file():
+                    out.append(self.project_sync(f"{ns.name}/{repo.name}"))
+        return out
 
     # -- async GitLab interface --------------------------------------------------------- #
+
+    async def list_projects(self) -> list[dict]:
+        return await asyncio.to_thread(self.projects_sync)
 
     async def get_project(self, project: str) -> dict:
         return await asyncio.to_thread(self.project_sync, project)
@@ -215,12 +171,6 @@ class FakeGitLab:
 
     async def list_events(self, project: str) -> list[dict]:
         return await asyncio.to_thread(self.events_sync, project)
-
-    async def list_merge_requests(self, project: str, limit: int = 5) -> list[dict]:
-        return await asyncio.to_thread(self.merge_requests_sync, project, limit)
-
-    async def get_merge_request(self, project: str, iid: int) -> dict:
-        return await asyncio.to_thread(self.merge_request_sync, project, iid)
 
     async def aclose(self) -> None:
         pass

@@ -2,28 +2,25 @@
 
 from __future__ import annotations
 
-import re
+import shutil
 import subprocess
 import sys
 
 import pytest
+import yaml
 
 from foundry_studio.foundry import locate
-from foundry_studio.manifest import graph_to_manifest, manifest_to_graph
+from foundry_studio.manifest import manifest_to_graph
 from foundry_studio.validation import Validator, stage
 
 from .conftest import FOUNDRY_DIR
 
 SWPIPELINE = (FOUNDRY_DIR / "PipelineManifest.yaml").read_text()
+CATALOG = FOUNDRY_DIR / "catalog.yaml"
 
 
-def schema_from_foundry(rel):
-    p = FOUNDRY_DIR / rel
-    return p.read_bytes() if p.is_file() else None
-
-
-def cli_errors(graph, tmp_path) -> list[str]:
-    manifest = stage(graph, tmp_path / "cli", schema_from_foundry)
+def cli_errors(graph, catalog, tmp_path) -> list[str]:
+    manifest = stage(graph, catalog, tmp_path / "cli")
     res = subprocess.run([sys.executable, str(FOUNDRY_DIR / "deploy.py"), "validate", str(manifest)],
                          capture_output=True, text=True)
     return [line[len("  - "):] for line in res.stderr.splitlines() if line.startswith("  - ")]
@@ -34,95 +31,85 @@ def edit(text: str, old: str, new: str) -> str:
     return text.replace(old, new)
 
 
-R = "Relation:\n  - InputSink -> XmlToJson\n  - XmlToJson -> Base64Decoder\n  - Base64Decoder -> OutputSink\n"
 CASES = {
-    "type mismatch": edit(SWPIPELINE, R, "Relation:\n  - InputSink -> XmlToJson -> OutputSink\n"
-                                         "  - XmlToJson -> Base64Decoder\n"),
-    "into InputSink / out of OutputSink / self loop": edit(
-        SWPIPELINE, R, R + "  - OutputSink -> InputSink\n  - XmlToJson -> XmlToJson\n"),
-    "cycle": edit(SWPIPELINE, R, R + "  - Base64Decoder -> XmlToJson\n"),
-    # (Edges to unknown nodes can't exist on the canvas; see test_dangling_relation_is_reported.)
-    "dangling transformer": edit(SWPIPELINE, R, "Relation:\n  - InputSink -> XmlToJson\n"),
-    "feeds sink and transformer": edit(SWPIPELINE, R, R + "  - XmlToJson -> OutputSink\n"),
-    "credential key": edit(SWPIPELINE, "    ConsumerGroup: swpipeline\n",
-                           "    ConsumerGroup: swpipeline\n    Password: hunter2\n"),
-    "unknown connection key": edit(SWPIPELINE, "    ConsumerGroup: swpipeline\n",
-                                   "    ConsumerGroup: swpipeline\n    Timeout: 5\n    socket.timeout.ms: 100\n"),
-    "SASL without SecretRef": edit(SWPIPELINE, "    SecretRef: downstream-kafka-creds\n", ""),
-    "topic collision": edit(SWPIPELINE, "Topic: packets.decoded", "Topic: SWpipeline.XmlToJson.out"),
-    "missing ontology": edit(SWPIPELINE, "  Ontology: Packets\n", ""),
+    "type mismatch": edit(SWPIPELINE, "Inputs: [SWpipeline.XmlToJson.out]", "Inputs: [raw.xml]"),
+    "output mismatch": edit(SWPIPELINE, "Output: SWpipeline.XmlToJson.out", "Output: packets.decoded"),
+    "unknown dataset": edit(SWPIPELINE, "Inputs: [raw.xml]", "Inputs: [raw.json]"),
+    "bad consumer group": edit(SWPIPELINE, "Inputs: [SWpipeline.XmlToJson.out]",
+                             "Inputs: [SWpipeline.XmlToJson.out]\n    ConsumerGroup: bad name"),
+    "cycle": edit(edit(SWPIPELINE, "Inputs: [raw.xml]", "Inputs: [packets.decoded]"),
+                  "IN: XmlPackets", "IN: Packets"),
+    "missing output": edit(SWPIPELINE, "    Output: packets.decoded\n", ""),
+    "no catalog": edit(SWPIPELINE, "Catalog: catalog.yaml", "Catalog: nope.yaml"),
 }
 
 
 @pytest.mark.parametrize("case", CASES)
 def test_errors_match_the_cli(case, foundry, tmp_path):
     graph = manifest_to_graph(CASES[case])
-    expected = cli_errors(graph, tmp_path)
-    assert expected, f"{case}: deploy.py accepted it"
-    result = Validator(foundry).validate(graph, schema_from_foundry)
+    if case == "no catalog":
+        graph["catalog"] = "nope.yaml"
+    catalog = CATALOG if case != "no catalog" else tmp_path / "missing.yaml"
+    expected = cli_errors(graph, catalog, tmp_path)
+    assert expected, "the case should be invalid"
+    result = Validator(foundry).validate(graph, catalog)
     assert not result["ok"]
     assert [e["message"] for e in result["errors"]] == expected
 
 
-def test_valid_pipeline(foundry, tmp_path):
-    result = Validator(foundry).validate(manifest_to_graph(SWPIPELINE), schema_from_foundry)
-    assert result["ok"] and result["errors"] == []
-    assert result["internalDatasets"] == ["SWpipeline.XmlToJson.out"]
-    assert result["topics"] == {
-        "InputSink->XmlToJson": {"topic": "raw.xml", "internal": False},
-        "XmlToJson->Base64Decoder": {"topic": "SWpipeline.XmlToJson.out", "internal": True},
-        "Base64Decoder->OutputSink": {"topic": "packets.decoded", "internal": False},
-    }
-    assert result["manifest"] == SWPIPELINE
+def test_valid_pipeline_summary(foundry):
+    r = Validator(foundry).validate(manifest_to_graph(SWPIPELINE), CATALOG)
+    assert r["ok"] and r["summary"].startswith("SWpipeline: OK — 2 transformers, 3 datasets")
+    assert (r["sources"], r["sinks"]) == (["raw.xml"], ["packets.decoded"])
 
 
-def test_errors_are_located(foundry):
-    graph = manifest_to_graph(CASES["type mismatch"])
-    errors = Validator(foundry).validate(graph, schema_from_foundry)["errors"]
-    mismatch = next(e for e in errors if "type mismatch" in e["message"])
-    assert mismatch["edge"] == ["XmlToJson", "OutputSink"]
-    assert locate("Transformers.XmlToJson: output goes nowhere (no outgoing edge)")["node"] == "XmlToJson"
-    assert locate("OutputSink.ConnectionSettings: SecurityProtocol SASL_SSL needs SecretRef") == {
-        "message": "OutputSink.ConnectionSettings: SecurityProtocol SASL_SSL needs SecretRef",
-        "node": "OutputSink", "edge": None, "nodes": ["OutputSink"], "field": "ConnectionSettings",
-    }
-    assert locate("Relation: cycle detected among Base64Decoder, XmlToJson")["nodes"] == ["Base64Decoder", "XmlToJson"]
-    assert locate("Defaults.InternalDatasets.ConnectionSettings.Brokers: required")["node"] is None
+def test_errors_are_located():
+    assert locate("Transformers.Base64Decoder.Inputs: raw.xml carries XmlPackets but Base64Decoder expects "
+                  "EncodedPackets")["edge"] == ["dataset:raw.xml", "Base64Decoder"]
+    assert locate("Transformers.XmlToJson.Output: XmlToJson emits EncodedPackets but packets.decoded carries "
+                  "Packets")["edge"] == ["XmlToJson", "dataset:packets.decoded"]
+    assert locate("Transformers.A.Inputs: unknown dataset 'x.y'; register the topic and add it to the catalog's "
+                  "Datasets")["edge"] == ["dataset:x.y", "A"]
+    assert locate("Transformers.A: missing 'Repo'")["node"] == "A"
+    assert locate("Transformers: cycle detected among A, B")["nodes"] == ["A", "B"]
+    assert locate("Datasets.raw.xml.Cluster: unknown cluster 'x' (defined: a)")["node"] == "dataset:raw.xml"
+    assert locate("Clusters.core: missing 'Brokers'")["field"] == "Clusters.core"
 
 
-def test_check_edge_uses_deploy_messages(foundry):
-    g = manifest_to_graph(SWPIPELINE)
-    g["edges"] = [{"source": "InputSink", "target": "XmlToJson"}]
+def test_check_edge(foundry):
     v = Validator(foundry)
-    assert v.check_edge(g, "XmlToJson", "Base64Decoder") == {"ok": True, "message": None}
-    refused = v.check_edge(g, "XmlToJson", "OutputSink")
-    assert refused["message"] == (
-        "Relation 'XmlToJson -> OutputSink': type mismatch — XmlToJson emits EncodedPackets but OutputSink expects Packets"
-    )
-    assert v.check_edge(g, "OutputSink", "XmlToJson")["message"].endswith("OutputSink cannot emit data")
-    assert v.check_edge(g, "XmlToJson", "InputSink")["message"].endswith("InputSink cannot receive data")
-    assert v.check_edge(g, "InputSink", "XmlToJson")["message"].endswith("duplicate edge")
-    g["edges"] += [{"source": "XmlToJson", "target": "Base64Decoder"}]
-    g["nodes"].append({"id": "Loop", "kind": "transformer",
-                       "transformer": {"IN": "Packets", "OUT": "EncodedPackets"}})
-    g["edges"] += [{"source": "Base64Decoder", "target": "Loop"}]
-    assert v.check_edge(g, "Loop", "Base64Decoder")["message"].startswith("Relation: cycle detected")
-    g["edges"] += [{"source": "Base64Decoder", "target": "OutputSink"}]
-    assert v.check_edge(g, "XmlToJson", "OutputSink")["message"].startswith("Relation 'XmlToJson -> OutputSink': type")
-    g["nodes"].append({"id": "Tee", "kind": "transformer", "transformer": {"IN": "Packets", "OUT": "Packets"}})
-    assert v.check_edge(g, "Base64Decoder", "Tee")["message"].startswith(
-        "Transformers.Base64Decoder: feeds both OutputSink and Loop, Tee")
-
-
-def test_untyped_sink_does_not_block_wiring(foundry):
-    g = manifest_to_graph(edit(SWPIPELINE, "  Ontology: Packets\n", ""))
-    assert Validator(foundry).check_edge(g, "XmlToJson", "OutputSink")["ok"]
-
-
-def test_validation_does_not_leak_temp_paths(foundry):
     g = manifest_to_graph(SWPIPELINE)
-    g["schemas"]["Packets"] = "schemas/missing.json"
-    errors = Validator(foundry).validate(g, schema_from_foundry)["errors"]
-    assert [e["message"] for e in errors] == ["Schemas.Packets: file not found: schemas/missing.json"]
-    assert not any(re.search(r"/tmp/|studio-validate", e["message"]) for e in errors)
-    assert graph_to_manifest(g)  # still writable
+    r = v.check_edge(g, "dataset:raw.xml", "Base64Decoder", CATALOG)
+    assert r["message"] == "Transformers.Base64Decoder.Inputs: raw.xml carries XmlPackets but Base64Decoder " \
+                           "expects EncodedPackets"
+    # A second output is fine as long as the schema matches.
+    assert "emits EncodedPackets but packets.decoded carries Packets" in \
+        v.check_edge(g, "XmlToJson", "dataset:packets.decoded", CATALOG)["message"]
+    assert "through a dataset" in v.check_edge(g, "XmlToJson", "Base64Decoder", CATALOG)["message"]
+    g["edges"] = [e for e in g["edges"] if e["source"] != "Base64Decoder"]
+    assert v.check_edge(g, "Base64Decoder", "dataset:packets.decoded", CATALOG)["ok"]
+
+
+def test_catalog_validation(foundry, tmp_path):
+    cat_dir = tmp_path / "ws"
+    shutil.copytree(FOUNDRY_DIR / "schemas", cat_dir / "schemas")
+    shutil.copyfile(CATALOG, cat_dir / "catalog.yaml")
+    from foundry_studio.manifest import parse_catalog
+
+    cat = parse_catalog(CATALOG.read_text())
+    v = Validator(foundry)
+    assert v.validate_catalog(cat, cat_dir / "catalog.yaml")["ok"]
+    cat["datasets"]["x.y"] = {"Cluster": "nowhere", "Schema": "Packets"}
+    r = v.validate_catalog(cat, cat_dir / "catalog.yaml")
+    assert not r["ok"] and r["errors"][0]["node"] == "dataset:x.y"
+
+
+def test_endpoint(foundry):
+    from foundry_studio.manifest import parse_catalog
+
+    cat = parse_catalog(CATALOG.read_text())
+    ep = Validator(foundry).endpoint(manifest_to_graph(SWPIPELINE), "XmlToJson", cat)
+    assert (ep["topic"], ep["schema"], ep["cluster"]) == ("SWpipeline.XmlToJson.out", "EncodedPackets", "internal")
+    assert ep["connection"]["Brokers"] == "kafka-internal:9092"
+    assert yaml.safe_load(CATALOG.read_text())["Datasets"]["raw.xml"]["Cluster"] == \
+        Validator(foundry).endpoint(manifest_to_graph(SWPIPELINE), "dataset:raw.xml", cat)["cluster"]

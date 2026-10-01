@@ -3,20 +3,6 @@ import { api, ApiError } from "../api";
 import { NAME_RE, useStudio } from "../store";
 import type { Issue } from "../types";
 
-const CI_LABEL: Record<string, string> = {
-  created: "pending",
-  waiting_for_resource: "pending",
-  preparing: "pending",
-  pending: "pending",
-  running: "running",
-  success: "passed",
-  failed: "failed",
-  canceled: "canceled",
-  skipped: "skipped",
-  manual: "manual",
-  scheduled: "scheduled",
-};
-
 export function focusIssue(issue: Issue) {
   const s = useStudio.getState();
   const edges = issue.edge ? [`${issue.edge[0]}->${issue.edge[1]}`] : [];
@@ -90,20 +76,59 @@ function LiveToggle() {
   );
 }
 
-function MrChip() {
-  const mr = useStudio((s) => s.mr);
-  if (!mr) return <div className="chip chip-muted">no merge requests</div>;
-  const status = mr.pipeline?.status ?? null;
-  const label = status ? CI_LABEL[status] ?? status : "no CI";
-  const cls = status === "success" ? "ok" : status === "failed" ? "error" : status === "running" || status === "pending" ? "running" : "muted";
+/** The pipeline's deploy state (deploy.py's record); opens the deploy panel. */
+function DeployChip() {
+  const name = useStudio((s) => s.meta?.name);
+  const record = useStudio((s) => s.pipelines.find((p) => p.name === s.meta?.name)?.deploy ?? null);
+  if (!name) return null;
+  const open = () => useStudio.setState({ deployOpen: true });
+  if (!record) {
+    return (
+      <button className="chip chip-muted" onClick={open} data-testid="deploy-chip" title="Never deployed">
+        not deployed
+      </button>
+    );
+  }
+  const cls = record.action === "stop" ? "muted" : "ok";
+  const label = record.action === "stop" ? "stopped" : record.action === "rollback" ? "rolled back" : "deployed";
   return (
-    <a className={`chip chip-${cls}`} href={mr.pipeline?.webUrl ?? mr.webUrl} target="_blank" rel="noreferrer" data-testid="mr-chip" title={mr.title}>
-      <span className="dot" /> !{mr.iid} · {mr.state} · CI {label}
-    </a>
+    <button
+      className={`chip chip-${cls}`}
+      onClick={open}
+      data-testid="deploy-chip"
+      title={`${record.action} ${record.id} at ${record.at} by ${record.by}`}
+    >
+      <span className="dot" /> {label} · {record.id}
+    </button>
   );
 }
 
-export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "draft" | "deployed") => void; onNew: () => void }) {
+/** Save: the catalog (if edited), then the pipeline. Resolves true when everything was saved. */
+export async function saveAll(): Promise<boolean> {
+  const s = useStudio.getState();
+  useStudio.setState({ busy: "save" });
+  try {
+    if (s.catalogDirty && s.catalog) {
+      const res = await api.saveCatalog(s.catalog);
+      useStudio.setState({ catalog: res.catalog, catalogDirty: false });
+    }
+    const graph = s.graph();
+    const res = await api.save(graph, s.layout());
+    s.markSaved({ kind: "saved", name: graph.name });
+    s.toast({ kind: "success", text: `Saved ${res.path}`, testId: "saved" });
+    const p = await api.pipelines();
+    useStudio.setState({ pipelines: p.pipelines });
+    return true;
+  } catch (e) {
+    const err = e as ApiError;
+    s.toast({ kind: "error", text: `Save failed: ${err.message}${err.errors?.length ? ` — ${err.errors[0].message}` : ""}` }, 9000);
+    return false;
+  } finally {
+    useStudio.setState({ busy: null });
+  }
+}
+
+export function TopBar({ onOpen, onNew }: { onOpen: (name: string) => void; onNew: () => void }) {
   const meta = useStudio((s) => s.meta);
   const origin = useStudio((s) => s.origin);
   const dirty = useStudio((s) => s.dirty);
@@ -112,24 +137,9 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
   const health = useStudio((s) => s.health);
   const watcher = useStudio((s) => s.watcher);
   const live = useStudio((s) => s.live);
+  const catalogDirty = useStudio((s) => s.catalogDirty);
 
-  const save = async () => {
-    const s = useStudio.getState();
-    useStudio.setState({ busy: "save" });
-    try {
-      const graph = s.graph();
-      const res = await api.save(graph, s.layout());
-      s.markSaved({ kind: "draft", name: graph.name });
-      s.toast({ kind: "success", text: `Saved ${res.path}` });
-      api.pipelines().then((p) => useStudio.setState({ pipelines: p.pipelines }));
-    } catch (e) {
-      s.toast({ kind: "error", text: `Save failed: ${(e as Error).message}` }, 9000);
-    } finally {
-      useStudio.setState({ busy: null });
-    }
-  };
-
-  const value = origin.kind === "new" ? "" : `${origin.kind}:${origin.name}`;
+  const value = origin.kind === "new" ? "" : origin.name;
   const watchErrors = Object.keys(watcher?.errors ?? {}).length;
 
   return (
@@ -142,23 +152,15 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
         onChange={(e) => {
           const v = e.target.value;
           if (v === "__new") return onNew();
-          const [source, name] = v.split(":");
-          onOpen(name, source as "draft" | "deployed");
+          onOpen(v);
         }}
       >
         {origin.kind === "new" && <option value="">New pipeline</option>}
-        {pipelines.map((p) => [
-          p.deployed && (
-            <option key={`d-${p.name}`} value={`deployed:${p.name}`}>
-              {p.name} (PipelineDeploys)
-            </option>
-          ),
-          p.draft && (
-            <option key={`l-${p.name}`} value={`draft:${p.name}`}>
-              {p.name} (local draft)
-            </option>
-          ),
-        ])}
+        {pipelines.map((p) => (
+          <option key={p.name} value={p.name}>
+            {p.name}
+          </option>
+        ))}
         <option value="__new">+ New pipeline…</option>
       </select>
       <div className="pipeline-name" data-testid="pipeline-title">
@@ -172,7 +174,11 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
           onChange={(e) => useStudio.getState().updateMeta((m) => ({ ...m, name: e.target.value.trim() }))}
           data-testid="pipeline-name"
         />
-        {dirty && <span className="dirty" title="Unsaved changes"> ●</span>}
+        {(dirty || catalogDirty) && (
+          <span className="dirty" title={catalogDirty ? "Unsaved changes (including the catalog)" : "Unsaved changes"} data-testid="dirty">
+            {" "}●
+          </span>
+        )}
       </div>
       <ValidationChip />
       <span className="spacer" />
@@ -180,7 +186,7 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
         className={`chip chip-${live ? (watchErrors ? "warn" : "muted") : "error"}`}
         title={
           live
-            ? `Watching ${watcher?.projects.join(", ")} (${watcher?.mode}, every ${watcher?.pollInterval}s)` +
+            ? `Watching ${watcher?.scope === "fixed" ? watcher.projects.join(", ") : `every project you're a member of (${watcher?.projects.length ?? 0})`}; transformers in ${(watcher?.withTransformers ?? []).join(", ") || "none yet"} (${watcher?.mode}, every ${watcher?.pollInterval}s)` +
               (watchErrors ? `\n${Object.entries(watcher!.errors).map(([p, e]) => `${p}: ${e}`).join("\n")}` : "")
             : "Live updates disconnected"
         }
@@ -190,8 +196,8 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
         {health?.mode === "demo" ? " · demo" : ""}
       </div>
       <LiveToggle />
-      <MrChip />
-      <button className="btn" onClick={save} disabled={!meta?.name || busy !== null} data-testid="save">
+      <DeployChip />
+      <button className="btn" onClick={() => void saveAll()} disabled={!meta?.name || busy !== null} data-testid="save">
         {busy === "save" ? "Saving…" : "Save"}
       </button>
       <button
@@ -204,40 +210,4 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string, source?: "dra
       </button>
     </header>
   );
-}
-
-export async function runDeploy() {
-  const s = useStudio.getState();
-  useStudio.setState({ busy: "deploy", deployOpen: false });
-  try {
-    const res = await api.deploy(s.graph());
-    if (res.status === "up_to_date") {
-      s.toast(
-        { kind: "info", text: `${s.meta?.name}: already up to date in PipelineDeploys; nothing to deploy.`, testId: "deploy-result" },
-        9000,
-      );
-    } else {
-      s.toast(
-        {
-          kind: "success",
-          text: `Merge request opened from ${res.branch ?? "a deploy branch"}`,
-          link: res.mrUrl ? { href: res.mrUrl, label: res.mrUrl } : undefined,
-          testId: "deploy-result",
-        },
-        15000,
-      );
-    }
-  } catch (e) {
-    const err = e as ApiError;
-    s.toast(
-      {
-        kind: "error",
-        text: `Deploy failed: ${err.message}${err.errors?.length ? ` — ${err.errors[0].message}` : ""}`,
-        testId: "deploy-result",
-      },
-      12000,
-    );
-  } finally {
-    useStudio.setState({ busy: null });
-  }
 }

@@ -1,4 +1,4 @@
-"""Live sink feed: config parity with the transformer runtime, schema checks, the demo
+"""Live dataset feed: config parity with the transformer runtime, schema checks, the demo
 stream, and (when a broker is available) a real Kafka topic.
 
 The Kafka tests run when STUDIO_TEST_KAFKA is set, e.g.
@@ -17,12 +17,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from foundry_studio.app import Services, create_app
+from foundry_studio import demo
 from foundry_studio.config import Settings
 from foundry_studio.manifest import manifest_to_graph
 from foundry_studio.peek import (
     FormatChecker, PeekError, bind, client_config, demo_feed, demo_record, demo_value, kafka_feed,
 )
-from foundry_studio.validation import Validator
 
 from .conftest import FOUNDRY_DIR
 
@@ -140,19 +140,6 @@ def test_demo_records_line_up_across_topics():
             assert json.loads(dec)["data"] == rec["data"].decode()
 
 
-def test_endpoints_follow_deploy_py(foundry):
-    graph = manifest_to_graph((FOUNDRY_DIR / "PipelineManifest.yaml").read_text())
-    v = Validator(foundry)
-    assert v.endpoint(graph, "InputSink")["topic"] == "raw.xml"
-    x = v.endpoint(graph, "XmlToJson")
-    assert (x["topic"], x["schema"], x["internal"]) == ("SWpipeline.XmlToJson.out", "EncodedPackets", True)
-    assert x["connection"]["Brokers"] == "kafka-internal:9092"  # Defaults.InternalDatasets
-    b = v.endpoint(graph, "Base64Decoder")  # feeds OutputSink, so it writes the sink's topic
-    assert (b["endpoint"], b["topic"], b["schema"], b["internal"]) == ("OutputSink", "packets.decoded", "Packets", False)
-    with pytest.raises(ValueError):
-        v.endpoint(graph, "Nope")
-
-
 def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake, foundry):
     import socket
     import threading
@@ -161,8 +148,8 @@ def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake
     import httpx
     import uvicorn
 
-    settings = Settings(foundry_dir=FOUNDRY_DIR, workspace=demo_root / "ws")
-    services = Services(settings, fake, foundry, fake_root=demo_root)
+    settings = Settings(foundry_dir=FOUNDRY_DIR)
+    services = Services(settings, fake, foundry, fake_root=demo_root, workspace=demo.workspace(demo_root))
     app = create_app(services, start_watcher=False)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -178,15 +165,15 @@ def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake
     try:
         assert httpx.post(f"{base}/api/peek", json={"graph": graph, "node": "Nope"}).status_code == 400
         events = []
-        with httpx.stream("POST", f"{base}/api/peek", json={"graph": graph, "node": "OutputSink"}, timeout=10) as r:
+        with httpx.stream("POST", f"{base}/api/peek", json={"graph": graph, "node": "Base64Decoder"}, timeout=10) as r:
             assert r.headers["content-type"].startswith("text/event-stream")
             for line in r.iter_lines():
                 if line.startswith("data: "):
                     events.append(json.loads(line[6:]))
                 if len(events) >= 5:
                     break
-        assert events[0] == {"type": "endpoint", "endpoint": "OutputSink", "topic": "packets.decoded",
-                             "schema": "Packets", "internal": False}
+        assert events[0] == {"type": "endpoint", "endpoint": "dataset:packets.decoded", "dataset": "packets.decoded",
+                             "topic": "packets.decoded", "schema": "Packets", "cluster": "downstream"}
         assert events[1]["state"] == "live"
         assert all(e["check"] == {"ok": True, "detail": "matches Packets"} for e in events[2:])
         # Closing the stream releases the feed (the semaphore slot comes back).

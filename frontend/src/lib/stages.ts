@@ -1,30 +1,24 @@
 // Live data stages: what each node reads and writes, and pairing a transformer's input
-// records with its output records.
+// records with its output records. Feeds are keyed by dataset (topic) name.
 
-import { SINK, SOURCE, type FeedMessage, type FeedState, type GraphEdge, type GraphNode } from "../types";
+import { datasetName, isDatasetNode, type FeedMessage, type FeedState, type GraphEdge, type GraphNode } from "../types";
 import { feedHealth, messageTime } from "./feedHealth";
+import { inputsOf, outputsOf } from "./rules";
 
 export interface GraphLike {
   nodes: GraphNode[];
   edges: GraphEdge[];
 }
 
-/**
- * The feed key for the topic a node writes. A transformer that feeds OutputSink writes
- * OutputSink's topic (deploy.py's endpoint_id), so both share the "OutputSink" feed.
- */
-export function writerKey(graph: GraphLike, node: string): string {
-  if (node === SOURCE || node === SINK) return node;
-  return graph.edges.some((e) => e.source === node && e.target === SINK) ? SINK : node;
-}
-
-/** Stages in pipeline order: InputSink, transformers (topologically, ties by name), OutputSink. */
+/** Every node in flow order: upstream first, ties by kind (datasets first) then name. */
 export function stages(graph: GraphLike): string[] {
-  const transformers = graph.nodes.filter((n) => n.kind === "transformer").map((n) => n.id);
-  const indeg = new Map(transformers.map((t) => [t, 0]));
+  const ids = graph.nodes.map((n) => n.id);
+  const indeg = new Map(ids.map((t) => [t, 0]));
   for (const e of graph.edges) if (indeg.has(e.target) && indeg.has(e.source)) indeg.set(e.target, indeg.get(e.target)! + 1);
+  const key = (id: string) => `${isDatasetNode(id) ? 0 : 1}${datasetName(id)}`;
+  const byKey = (a: string, b: string) => key(a).localeCompare(key(b));
   const order: string[] = [];
-  const ready = transformers.filter((t) => indeg.get(t) === 0).sort();
+  const ready = ids.filter((t) => indeg.get(t) === 0).sort(byKey);
   while (ready.length) {
     const t = ready.shift()!;
     order.push(t);
@@ -32,28 +26,31 @@ export function stages(graph: GraphLike): string[] {
       indeg.set(e.target, indeg.get(e.target)! - 1);
       if (indeg.get(e.target) === 0) {
         ready.push(e.target);
-        ready.sort();
+        ready.sort(byKey);
       }
     }
   }
-  const rest = transformers.filter((t) => !order.includes(t)).sort();
-  return [SOURCE, ...order, ...rest, SINK];
+  return [...order, ...ids.filter((t) => !order.includes(t)).sort(byKey)];
 }
 
-/** The feeds a stage needs: what it reads (inputs) and what it writes (output). */
-export function stageFeeds(graph: GraphLike, stage: string): { inputs: string[]; output: string } {
-  if (stage === SOURCE || stage === SINK) return { inputs: [], output: stage };
-  const inputs = [...new Set(graph.edges.filter((e) => e.target === stage).map((e) => writerKey(graph, e.source)))];
-  return { inputs, output: writerKey(graph, stage) };
+/** The feeds a stage needs: the datasets it reads (inputs) and writes (outputs). A dataset is its own output. */
+export function stageFeeds(graph: GraphLike, stage: string): { inputs: string[]; outputs: string[] } {
+  if (isDatasetNode(stage)) return { inputs: [], outputs: [datasetName(stage)] };
+  return { inputs: inputsOf(graph, stage), outputs: outputsOf(graph, stage) };
 }
 
-/** Every topic the pipeline touches, as feed keys (one per topic). */
+/** Every dataset on the canvas, in flow order (one feed each). */
 export function liveKeys(graph: GraphLike): string[] {
-  return [...new Set(stages(graph).map((s) => writerKey(graph, s)))];
+  return stages(graph).filter(isDatasetNode).map(datasetName);
+}
+
+/** The dataset an edge carries: whichever end is a dataset. */
+export function edgeDataset(source: string, target: string): string {
+  return isDatasetNode(source) ? datasetName(source) : datasetName(target);
 }
 
 export interface StageStats {
-  inRate: number; // messages/min on what the stage reads (for a sink: its topic)
+  inRate: number; // messages/min on what the stage reads (for a dataset: itself)
   outRate: number; // messages/min on what it writes
   transformed: number;
   dropped: number;
@@ -64,10 +61,11 @@ export interface StageStats {
 
 /** Live numbers for one stage, for the overview, the nodes and the edges. */
 export function stageStats(graph: GraphLike, stage: string, feeds: Record<string, FeedState>, now: number): StageStats {
-  const { inputs, output } = stageFeeds(graph, stage);
-  const outFeed = feeds[output];
+  const { inputs, outputs } = stageFeeds(graph, stage);
+  const outFeeds = outputs.map((k) => feeds[k]).filter(Boolean) as FeedState[];
+  const outFeed = outFeeds[0];
   const out = outFeed ? feedHealth(outFeed, now) : null;
-  if (stage === SOURCE || stage === SINK) {
+  if (isDatasetNode(stage)) {
     return {
       inRate: out?.perMinute ?? 0, outRate: out?.perMinute ?? 0, transformed: 0, dropped: 0,
       lastAt: out?.lastAt ?? null, tone: out?.tone ?? "muted", label: out?.label ?? "Off",
@@ -75,12 +73,13 @@ export function stageStats(graph: GraphLike, stage: string, feeds: Record<string
   }
   const inFeeds = inputs.map((k) => feeds[k]).filter(Boolean) as FeedState[];
   const inRate = inFeeds.reduce((n, f) => n + feedHealth(f, now).perMinute, 0);
+  // Every output gets every record, so pair against the first one that's being watched.
   const pairs = pairRecords(inFeeds.flatMap((f) => f.messages), outFeed?.messages ?? [], now);
   const dropped = pairs.filter((p) => p.status === "dropped").length;
   const transformed = pairs.filter((p) => p.status === "transformed").length;
   const outRate = out?.perMinute ?? 0;
   const lastAt = out?.lastAt ?? null;
-  const states = [...inFeeds, outFeed].filter(Boolean).map((f) => f!.state);
+  const states = [...inFeeds, ...outFeeds].map((f) => f.state);
   let tone: StageStats["tone"] = "muted";
   let label = `${inRate} in → ${outRate} out/min`;
   if (states.length === 0 || states.every((st) => st === "idle")) label = "Off";

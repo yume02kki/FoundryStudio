@@ -1,35 +1,42 @@
-"""Offline demo: a local stand-in for skywalker and PipelineDeploys.
+"""Offline demo: a local stand-in for skywalker, a workspace, and a deploy target.
 
-    python -m foundry_studio.demo init                     # (re)create the demo repos
+    python -m foundry_studio.demo init                     # (re)create the demo
     python -m foundry_studio.demo tag Base64Decoder v0.4.3 # commit + tag, like a release push
     python -m foundry_studio.demo add Deduplicate Packets Packets "Drops repeated guids"
     python -m foundry_studio.demo remove Deduplicate
-    python -m foundry_studio.demo ci 1 failed             # set a merge request's CI status
 
-The crates are stand-ins with the shape of skywalker's (the real repo is private);
-PipelineDeploys/SWpipeline is rendered by deploy.py from foundry's PipelineManifest.yaml,
-so deploying an unchanged SWpipeline reports "already up to date".
+The transformers are stand-ins with the shape of skywalker's C# ones (the real repo is
+private). The workspace starts with foundry's example catalog and SWpipeline. The deploy
+target uses `Runner: none`: deploys are recorded (history, rollback) and the docker
+commands they would run are printed, so the demo needs neither Docker nor Kafka.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 from .config import REPO_ROOT
 
 DEFAULT_ROOT = REPO_ROOT / ".demo-gitlab"
 SKYWALKER = "yume02kki/skywalker"
-DEPLOYS = "yume02kki/PipelineDeploys"
-SDK = '{ git = "https://gitlab.com/yume02kki/foundry.git", tag = "sdk-v0.1.1" }'
-RUST_TYPES = {"XmlPackets": "XmlPacket", "EncodedPackets": "EncodedPacket", "Packets": "Packet"}
+SDK_VERSION = "0.3.0"
+CS_TYPES = {"XmlPackets": "XmlPacket", "EncodedPackets": "EncodedPacket", "Packets": "Packet"}
 
-# Fixed dates keep commit SHAs, and therefore renders, identical across `init` runs.
+# Fixed dates keep commit SHAs identical across `init` runs.
 FIXED_DATE = "2026-09-01T12:00:00+00:00"
+
+
+def workspace(root: Path) -> Path:
+    return root / "workspace"
+
+
+def target_file(root: Path) -> Path:
+    return root / "target.yaml"
 
 
 def _git(repo: Path, *args: str, date: str | None = None) -> str:
@@ -44,31 +51,36 @@ def _git(repo: Path, *args: str, date: str | None = None) -> str:
     return res.stdout.strip()
 
 
-def crate_files(name: str, input: str, output: str, version: str = "0.4.2",
-                description: str | None = None, declare: bool = False) -> dict[str, str]:
-    rin, rout = RUST_TYPES.get(input, input), RUST_TYPES.get(output, output)
-    package = "".join("-" + c.lower() if c.isupper() and i else c.lower() for i, c in enumerate(name))
-    files = {
-        "Cargo.toml": f'[package]\nname = "{package}"\nversion = "{version}"\nedition = "2021"\n\n'
-                      f"[dependencies]\nfoundry-transformer = {SDK}\nfoundry-schemas = {SDK}\n",
-        "Cargo.lock": f"# placeholder lock file for the demo crate {package}\nversion = 4\n",
-        "rust-toolchain.toml": '[toolchain]\nchannel = "1.89"\n',
-        "Dockerfile": "FROM rust:1.89 AS build\nWORKDIR /src\nCOPY . .\nRUN cargo build --release --locked\n\n"
-                      f"FROM debian:bookworm-slim\nCOPY --from=build /src/target/release/{package} /usr/local/bin/transformer\n"
-                      'ENTRYPOINT ["/usr/local/bin/transformer"]\n',
-        "src/main.rs": f"use foundry_schemas::{{{', '.join(sorted({rin, rout}))}}};\n"
-                       "use foundry_transformer::{Dataset, Error, Transformer};\n\n"
-                       f"struct {name};\n\nimpl Transformer for {name} {{\n"
-                       f"    type In = {rin};\n    type Out = {rout};\n\n"
-                       f"    fn transform(&mut self, input: Dataset<{rin}>) -> Result<Dataset<{rout}>, Error> {{\n"
-                       "        input.into_iter().map(|p| Ok(p.into())).collect()\n    }\n}\n\n"
-                       f"fn main() -> std::process::ExitCode {{\n    foundry_transformer::run({name})\n}}\n",
+def transformer_files(name: str, input: str, output: str, version: str = "0.4.2",
+                      description: str | None = None) -> dict[str, str]:
+    """A C# transformer folder as TRANSFORMERS.md describes it."""
+    cin, cout = CS_TYPES.get(input, input), CS_TYPES.get(output, output)
+    body = ("            yield return p;" if cin == cout else
+            f"            yield return new {cout} {{ Guid = p.Guid, Data = p.Data, TimeSent = p.TimeSent,\n"
+            "                HostIp = p.HostIp, TargetIp = p.TargetIp };")
+    return {
+        "transformer.yaml": f"name: {name}\nin: {input}\nout: {output}\ndescription: {description or name}\n",
+        f"{name}.csproj": (
+            '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n'
+            "    <TargetFramework>net8.0</TargetFramework>\n    <Nullable>enable</Nullable>\n"
+            "    <ImplicitUsings>enable</ImplicitUsings>\n"
+            "    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>\n"
+            f"    <Version>{version}</Version>\n  </PropertyGroup>\n  <ItemGroup>\n"
+            f'    <PackageReference Include="Foundry.Transformer" Version="{SDK_VERSION}" />\n'
+            "  </ItemGroup>\n</Project>\n"),
+        "packages.lock.json": f'{{\n  "version": 1,\n  "dependencies": {{}},\n  "_demo": "placeholder lock file for {name}"\n}}\n',
+        "Program.cs": (
+            "using Foundry.Schemas;\nusing Foundry.Transformer;\n\n"
+            f"return Runtime.Run(new {name}());\n\n"
+            f"sealed class {name} : ITransformer<{cin}, {cout}>\n{{\n"
+            f"    public async IAsyncEnumerable<{cout}> Transform(Records<{cin}> input)\n    {{\n"
+            f"        await foreach (var p in input)\n{body}\n    }}\n}}\n"),
+        "Dockerfile": (
+            "FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build\nWORKDIR /src\nCOPY . .\n"
+            "RUN dotnet publish -c Release --locked-mode -o /app\n\n"
+            "FROM mcr.microsoft.com/dotnet/runtime:8.0\nCOPY --from=build /app /app\n"
+            f'ENTRYPOINT ["dotnet", "/app/{name}.dll"]\n'),
     }
-    if declare:
-        files["transformer.yaml"] = (
-            f"name: {name}\nin: {input}\nout: {output}\ndescription: {description or name}\n"
-        )
-    return files
 
 
 def _write(repo: Path, folder: str, files: dict[str, str]) -> None:
@@ -80,56 +92,44 @@ def _write(repo: Path, folder: str, files: dict[str, str]) -> None:
 
 def init(root: Path = DEFAULT_ROOT, foundry_dir: Path = REPO_ROOT / "vendor" / "foundry") -> Path:
     from .foundry import Foundry
-    from .gitenv import add_git_config
+    from .pipelines import seed
 
     if root.exists():
         shutil.rmtree(root)
     sky = root / SKYWALKER
     sky.mkdir(parents=True)
     _git(sky, "init", "-q", "-b", "main")
-    (sky / "README.md").write_text("# skywalker (demo)\n\nOne folder per transformer crate.\n")
-    _write(sky, "XmlToJson", crate_files("XmlToJson", "XmlPackets", "EncodedPackets"))
-    _write(sky, "Base64Decoder", crate_files("Base64Decoder", "EncodedPackets", "Packets"))
+    (sky / "README.md").write_text("# skywalker (demo)\n\nOne folder per transformer.\n")
+    _write(sky, "XmlToJson", transformer_files("XmlToJson", "XmlPackets", "EncodedPackets",
+                                               description="Converts XML packets to JSON, data still base64"))
+    _write(sky, "Base64Decoder", transformer_files("Base64Decoder", "EncodedPackets", "Packets",
+                                                   description="Decodes each packet's base64 data"))
     _git(sky, "add", "-A")
     _git(sky, "commit", "-q", "-m", "XmlToJson and Base64Decoder 0.4.2", date=FIXED_DATE)
-    for crate in ("XmlToJson", "Base64Decoder"):
-        _git(sky, "tag", f"{crate}/v0.4.2", date=FIXED_DATE)
+    for name in ("XmlToJson", "Base64Decoder"):
+        _git(sky, "tag", f"{name}/v0.4.2", date=FIXED_DATE)
 
-    deploys = root / DEPLOYS
-    deploys.mkdir(parents=True)
-    _git(deploys, "init", "-q", "-b", "main")
-    (deploys / "README.md").write_text("# PipelineDeploys (demo)\n\nRendered by deploy.py. One folder per pipeline.\n")
-
-    foundry = Foundry(foundry_dir)
-    env_backup = dict(os.environ)
-    try:
-        add_git_config(os.environ, [(f"url.{sky.resolve()}.insteadOf", f"https://gitlab.com/{SKYWALKER}.git")])
-        with tempfile.TemporaryDirectory() as tmp:
-            foundry.deploy.render(foundry_dir / "PipelineManifest.yaml", Path(tmp) / "SWpipeline")
-            shutil.copytree(Path(tmp) / "SWpipeline", deploys / "SWpipeline")
-    finally:
-        os.environ.clear()
-        os.environ.update(env_backup)
-    _git(deploys, "add", "-A")
-    _git(deploys, "commit", "-q", "-m", "deploy(SWpipeline)", date=FIXED_DATE)
+    seed(workspace(root), Foundry(foundry_dir))
+    target_file(root).write_text(
+        "# Demo deploy target: deploys are recorded, nothing runs (no Docker, no Kafka needed).\n"
+        "Runner: none\nCheckTopics: false\nStateDir: state\n")
     return root
 
 
-def tag(root: Path, crate: str, version: str) -> str:
+def tag(root: Path, name: str, version: str) -> str:
     sky = root / SKYWALKER
-    cargo = sky / crate / "Cargo.toml"
-    text = cargo.read_text()
-    lines = [f'version = "{version.lstrip("v")}"' if line.startswith("version = ") else line for line in text.splitlines()]
-    cargo.write_text("\n".join(lines) + "\n")
+    csproj = sky / name / f"{name}.csproj"
+    csproj.write_text(re.sub(r"<Version>[^<]*</Version>", f"<Version>{version.lstrip('v')}</Version>",
+                             csproj.read_text()))
     _git(sky, "add", "-A")
-    _git(sky, "commit", "-q", "-m", f"{crate} {version}")
-    _git(sky, "tag", f"{crate}/{version}")
-    return f"{crate}/{version}"
+    _git(sky, "commit", "-q", "-m", f"{name} {version}")
+    _git(sky, "tag", f"{name}/{version}")
+    return f"{name}/{version}"
 
 
 def add(root: Path, name: str, input: str, output: str, description: str | None = None) -> None:
     sky = root / SKYWALKER
-    _write(sky, name, crate_files(name, input, output, "0.1.0", description, declare=True))
+    _write(sky, name, transformer_files(name, input, output, "0.1.0", description))
     _git(sky, "add", "-A")
     _git(sky, "commit", "-q", "-m", f"Add {name}")
 
@@ -146,27 +146,21 @@ def main(argv=None) -> None:
     ap.add_argument("--root", type=Path, default=Path(os.environ.get("STUDIO_DEMO_ROOT", DEFAULT_ROOT)))
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init")
-    s = sub.add_parser("tag"); s.add_argument("crate"); s.add_argument("version")
+    s = sub.add_parser("tag"); s.add_argument("name"); s.add_argument("version")
     s = sub.add_parser("add"); s.add_argument("name"); s.add_argument("input"); s.add_argument("output")
     s.add_argument("description", nargs="?")
     s = sub.add_parser("remove"); s.add_argument("name")
-    s = sub.add_parser("ci"); s.add_argument("iid", type=int); s.add_argument("status")
     a = ap.parse_args(argv)
     if a.cmd == "init":
-        print(f"demo repos in {init(a.root)}")
+        print(f"demo in {init(a.root)}")
     elif a.cmd == "tag":
-        print(f"tagged {tag(a.root, a.crate, a.version)}")
+        print(f"tagged {tag(a.root, a.name, a.version)}")
     elif a.cmd == "add":
         add(a.root, a.name, a.input, a.output, a.description)
         print(f"added {a.name}")
     elif a.cmd == "remove":
         remove(a.root, a.name)
         print(f"removed {a.name}")
-    elif a.cmd == "ci":
-        from .fake_gitlab import FakeGitLab
-
-        FakeGitLab(a.root).set_pipeline_status(DEPLOYS, a.iid, a.status)
-        print(f"!{a.iid}: CI {a.status}")
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ import { schemaColor } from "../lib/schemaColor";
 import { useStudio } from "../store";
 import type { TransformerInfo } from "../types";
 import { DRAG_MIME } from "./Canvas";
+import { Datasets } from "./Datasets";
 import { LiveData, LiveTabBadges } from "./LiveData";
 
 const FAV_KEY = "foundry-studio.favorites";
@@ -160,11 +161,19 @@ export function AssetBrowser() {
       <div className="panel-tabs" role="tablist">
         <button
           role="tab"
-          className={`tab${tab === "project" ? " active" : ""}`}
-          onClick={() => useStudio.setState({ bottomTab: "project" })}
-          data-testid="tab-project"
+          className={`tab${tab === "transformers" ? " active" : ""}`}
+          onClick={() => useStudio.setState({ bottomTab: "transformers" })}
+          data-testid="tab-transformers"
         >
-          Project
+          Transformers
+        </button>
+        <button
+          role="tab"
+          className={`tab${tab === "datasets" ? " active" : ""}`}
+          onClick={() => useStudio.setState({ bottomTab: "datasets" })}
+          data-testid="tab-datasets"
+        >
+          Datasets
         </button>
         <button
           role="tab"
@@ -175,7 +184,7 @@ export function AssetBrowser() {
           Live data <LiveTabBadges />
         </button>
         <span className="tab-spacer" />
-        {tab === "project" ? (
+        {tab === "transformers" ? (
           <input
             className="search"
             placeholder="Search transformers"
@@ -183,6 +192,8 @@ export function AssetBrowser() {
             onChange={(e) => setQuery(e.target.value)}
             data-testid="asset-search"
           />
+        ) : tab === "datasets" ? (
+          <span className="tab-note">Registered topics from the shared catalog · drag onto the canvas</span>
         ) : (
           <>
             <span className="tab-note">Read-only: never joins the pipeline's consumer group, never commits offsets</span>
@@ -196,6 +207,8 @@ export function AssetBrowser() {
       </div>
       {tab === "live" ? (
         <LiveData />
+      ) : tab === "datasets" ? (
+        <Datasets />
       ) : (
       <div className="assets-body">
         <div className="tree" data-testid="asset-tree">

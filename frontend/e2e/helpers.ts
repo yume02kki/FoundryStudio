@@ -28,6 +28,13 @@ export async function dropCard(page: Page, name: string, x: number, y: number) {
   await page.getByTestId(`card-${name}`).dragTo(page.getByTestId("canvas"), { targetPosition: { x, y } });
 }
 
+/** Drop a dataset from the Datasets tab onto the canvas at a point relative to the canvas' top-left corner. */
+export async function dropDataset(page: Page, name: string, x: number, y: number) {
+  await page.getByTestId("tab-datasets").click();
+  await page.getByTestId(`dataset-card-${name}`).dragTo(page.getByTestId("canvas"), { targetPosition: { x, y } });
+  await page.getByTestId("tab-transformers").click();
+}
+
 /** Run the demo CLI against the e2e's local GitLab stand-in (like pushing to skywalker). */
 export function demo(...args: string[]) {
   const root = join(process.env.STUDIO_E2E_SCRATCH!, "gitlab");

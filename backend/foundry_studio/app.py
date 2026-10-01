@@ -7,7 +7,6 @@ import hmac
 import json
 import logging
 import os
-import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -22,9 +21,9 @@ from .discovery import Discovery
 from .fake_gitlab import FakeGitLab
 from .foundry import Foundry
 from .gitlab import GitLab, HttpGitLab
-from .manifest import SINK, SOURCE, graph_to_manifest
+from .manifest import graph_to_manifest
 from .peek import FormatChecker, PeekError, bind, client_config, demo_feed, kafka_feed
-from .pipelines import PipelineError, PipelineStore
+from .pipelines import PipelineError, PipelineStore, seed
 from .validation import Validator
 from .watcher import EventBus, Watcher
 
@@ -33,6 +32,7 @@ log = logging.getLogger("foundry_studio")
 
 class GraphBody(BaseModel):
     graph: dict
+    catalog: dict | None = None  # an edited, unsaved catalog to validate against
 
 
 class SaveBody(BaseModel):
@@ -40,31 +40,42 @@ class SaveBody(BaseModel):
     layout: dict | None = None
 
 
+class CatalogBody(BaseModel):
+    catalog: dict
+
+
 class PeekBody(BaseModel):
     graph: dict
-    node: str  # InputSink | OutputSink
+    node: str  # a dataset node, or a transformer (the dataset it writes)
+
+
+class RollbackBody(BaseModel):
+    id: str
 
 
 class EdgeBody(BaseModel):
     graph: dict
     source: str
     target: str
+    catalog: dict | None = None
 
 
 class Services:
-    def __init__(self, settings: Settings, gitlab: GitLab, foundry: Foundry, fake_root: Path | None = None):
+    def __init__(self, settings: Settings, gitlab: GitLab, foundry: Foundry, fake_root: Path | None = None,
+                 workspace: Path | None = None, deploy_target: Path | None = None):
         self.settings = settings
         self.gitlab = gitlab
         self.foundry = foundry
         self.fake_root = fake_root
         self.bus = EventBus()
-        self.discovery = Discovery(gitlab, foundry.rust_schema_names, set(foundry.schemas))
+        self.workspace = workspace or settings.workspace or REPO_ROOT / "workspace"
         self.validator = Validator(foundry)
-        self.pipelines = PipelineStore(gitlab, foundry, settings.workspace, settings.deploys_project,
-                                       settings.deploys_base)
+        self.pipelines = PipelineStore(foundry, self.workspace, deploy_target or settings.deploy_target)
+        self.discovery = Discovery(gitlab, foundry.rust_schema_names,
+                                   lambda: set(self.pipelines.catalog()["schemas"]))
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.transformer_projects,
-                               settings.deploys_project, settings.poll_interval, settings.full_rescan_interval)
+                               settings.poll_interval, settings.full_rescan_interval)
 
 
 def _sse(event: dict) -> str:
@@ -111,15 +122,16 @@ def build_services(settings: Settings) -> Services:
         if not fake_root.exists():
             demo.init(fake_root, settings.foundry_dir)
         gitlab: GitLab = FakeGitLab(fake_root)
+        workspace = settings.workspace or demo.workspace(fake_root)
+        target = settings.deploy_target or demo.target_file(fake_root)
     else:
         gitlab = HttpGitLab(settings.gitlab_url, settings.token)
-    shim_dir = Path(tempfile.mkdtemp(prefix="studio-bin-"))
-    gitenv.configure(
-        os.environ, gitlab_url=settings.gitlab_url, deploys_project=settings.deploys_project, shim_dir=shim_dir,
-        deploys_base=settings.deploys_base,
-        fake_root=fake_root, fake_projects=[*settings.transformer_projects, settings.deploys_project],
-    )
-    return Services(settings, gitlab, foundry, fake_root)
+        workspace, target = settings.workspace or REPO_ROOT / "workspace", settings.deploy_target
+    fake_projects = ([p["path_with_namespace"] for p in FakeGitLab(fake_root).projects_sync()]
+                     if fake_root else [])
+    gitenv.configure(os.environ, gitlab_url=settings.gitlab_url, fake_root=fake_root, fake_projects=fake_projects)
+    seed(workspace, foundry)  # a new workspace starts with foundry's example catalog and pipeline
+    return Services(settings, gitlab, foundry, fake_root, workspace, target)
 
 
 def create_app(services: Services | None = None, start_watcher: bool = True) -> FastAPI:
@@ -150,14 +162,28 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             "tokenConfigured": bool(s.settings.token),
             "webhookConfigured": bool(s.settings.webhook_secret),
             "foundryCommit": s.foundry.commit,
-            "deploysProject": s.settings.deploys_project,
-            "transformerProjects": s.settings.transformer_projects,
+            "workspace": str(s.workspace),
+            "deployTarget": str(s.pipelines.target_file) if s.pipelines.target_file else None,
+            "transformerProjects": s.watcher.projects_with_transformers,
             "watcher": s.watcher.status(),
         }
 
-    @app.get("/api/schemas")
-    async def schemas(request: Request):
-        return {n: {"file": i.file, "rustType": i.rust_type} for n, i in svc(request).foundry.schemas.items()}
+    @app.get("/api/catalog")
+    async def catalog(request: Request):
+        return svc(request).pipelines.catalog()
+
+    @app.post("/api/catalog/validate")
+    async def validate_catalog(body: CatalogBody, request: Request):
+        s = svc(request)
+        return await asyncio.to_thread(s.validator.validate_catalog, body.catalog, s.pipelines.catalog_path)
+
+    @app.put("/api/catalog")
+    async def save_catalog(body: CatalogBody, request: Request):
+        s = svc(request)
+        check = await asyncio.to_thread(s.validator.validate_catalog, body.catalog, s.pipelines.catalog_path)
+        if not check["ok"]:
+            raise PipelineError(422, f"catalog invalid ({len(check['errors'])} errors); not saved", check["errors"])
+        return await asyncio.to_thread(s.pipelines.save_catalog, body.catalog)
 
     @app.get("/api/transformers")
     async def transformers(request: Request):
@@ -172,24 +198,16 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
         }
 
     @app.get("/api/template")
-    async def template(request: Request):
-        ex = svc(request).foundry.example_manifest
-        return {
-            "name": "", "defaults": ex.get("Defaults") or {}, "schemas": ex.get("Schemas") or {},
-            "nodes": [
-                {"id": SOURCE, "kind": "source", "sink": {"Type": "Kafka", "ConnectionSettings": {}}},
-                {"id": SINK, "kind": "output", "sink": {"Type": "Kafka", "ConnectionSettings": {}}},
-            ],
-            "edges": [], "extra": {},
-        }
+    async def template():
+        return {"name": "", "catalog": "../catalog.yaml", "consumerGroup": "", "nodes": [], "edges": [], "extra": {}}
 
     @app.get("/api/pipelines")
     async def list_pipelines(request: Request):
-        return {"pipelines": await svc(request).pipelines.list()}
+        return {"pipelines": await asyncio.to_thread(svc(request).pipelines.list)}
 
     @app.get("/api/pipelines/{name}")
-    async def load_pipeline(name: str, request: Request, source: str | None = None):
-        return await svc(request).pipelines.load(name, source)
+    async def load_pipeline(name: str, request: Request):
+        return await asyncio.to_thread(svc(request).pipelines.load, name)
 
     @app.put("/api/pipelines/{name}")
     async def save_pipeline(name: str, body: SaveBody, request: Request):
@@ -204,46 +222,95 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
     @app.post("/api/validate")
     async def validate(body: GraphBody, request: Request):
         s = svc(request)
-        resolver = s.pipelines.schema_resolver(body.graph.get("name"))
-        return await asyncio.to_thread(s.validator.validate, body.graph, resolver)
+        return await asyncio.to_thread(s.validator.validate, body.graph, s.pipelines.catalog_path, body.catalog)
 
     @app.post("/api/check-edge")
     async def check_edge(body: EdgeBody, request: Request):
-        return svc(request).validator.check_edge(body.graph, body.source, body.target)
-
-    @app.post("/api/deploy")
-    async def deploy(body: GraphBody, request: Request):
         s = svc(request)
-        if not s.fake_root and not s.settings.token:
-            raise HTTPException(400, "GITLAB_TOKEN is not set; Deploy needs write_repository and api scopes")
-        proj = await s.gitlab.get_project(s.settings.deploys_project)
-        result = await asyncio.to_thread(s.pipelines.deploy, body.graph, proj["http_url_to_repo"])
-        if result["status"] == "opened":
-            await s.watcher._guard(s.settings.deploys_project, s.watcher.refresh_merge_requests(), rescan=False)
-        return result
+        return await asyncio.to_thread(s.validator.check_edge, body.graph, body.source, body.target,
+                                       s.pipelines.catalog_path, body.catalog)
 
-    @app.get("/api/merge-requests/latest")
-    async def latest_mr(request: Request):
-        return {"mr": svc(request).watcher.latest_mr}
+    # -- deploys ------------------------------------------------------------------------ #
+
+    def _operation(request: Request, work) -> StreamingResponse:
+        """Server-Sent Events for a blocking deploy.py operation: log lines, then result (or error)."""
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def log(line: str) -> None:
+            for part in str(line).splitlines() or [""]:
+                loop.call_soon_threadsafe(queue.put_nowait, {"type": "log", "line": part})
+
+        def run() -> None:
+            try:
+                event = {"type": "result", **work(log)}
+            except PipelineError as e:
+                event = {"type": "error", "status": e.status, "message": str(e), "errors": e.errors}
+            except Exception as e:  # keep the stream well-formed whatever happens
+                log_ = logging.getLogger("foundry_studio.deploy")
+                log_.exception("deploy operation failed")
+                event = {"type": "error", "status": 500, "message": str(e), "errors": []}
+            loop.call_soon_threadsafe(queue.put_nowait, event)
+
+        async def stream():
+            task = asyncio.create_task(asyncio.to_thread(run))
+            try:
+                while True:
+                    try:
+                        event = await asyncio.wait_for(queue.get(), timeout=10)
+                    except asyncio.TimeoutError:
+                        yield ": keep-alive\n\n"
+                        continue
+                    yield _sse(event)
+                    if event["type"] in ("result", "error"):
+                        break
+            finally:
+                await task
+
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+    @app.post("/api/pipelines/{name}/deploy")
+    async def deploy(name: str, request: Request):
+        s = svc(request)
+        s.pipelines.target()  # fail fast (400) when no target is configured
+        return _operation(request, lambda log: s.pipelines.deploy(name, log))
+
+    @app.post("/api/pipelines/{name}/rollback")
+    async def rollback(name: str, body: RollbackBody, request: Request):
+        s = svc(request)
+        s.pipelines.target()
+        return _operation(request, lambda log: s.pipelines.rollback(name, body.id, log))
+
+    @app.post("/api/pipelines/{name}/stop")
+    async def stop(name: str, request: Request):
+        s = svc(request)
+        s.pipelines.target()
+        return _operation(request, lambda log: s.pipelines.stop(name, log))
+
+    @app.get("/api/pipelines/{name}/deploys")
+    async def deploys(name: str, request: Request):
+        return await asyncio.to_thread(svc(request).pipelines.history, name)
 
     @app.post("/api/peek")
     async def peek(body: PeekBody, request: Request):
-        """Server-Sent Events: a read-only live feed of the topic a node writes (see peek.py).
+        """Server-Sent Events: a read-only live feed of a dataset (see peek.py).
 
-        node is InputSink / OutputSink (the sink's topic) or a transformer (its output topic:
-        an internal dataset, or OutputSink's topic when it feeds it)."""
+        node is a dataset node, or a transformer (the dataset it writes)."""
         s = svc(request)
+        catalog = s.pipelines.catalog()
         try:
-            ep = s.validator.endpoint(body.graph, body.node)
+            ep = s.validator.endpoint(body.graph, body.node, catalog)
         except ValueError as e:
             raise HTTPException(400, str(e))
         topic, ontology = ep["topic"], ep["schema"]
-        if not topic:
-            raise HTTPException(400, f"{body.node} has no Topic")
-        schema_file = (body.graph.get("schemas") or {}).get(ontology) if ontology else None
-        schema_bytes = s.pipelines.schema_resolver(body.graph.get("name"))(schema_file) if schema_file else None
+        schema_file = (catalog.get("schemas") or {}).get(ontology) if ontology else None
+        schema_path = (s.workspace / schema_file).resolve() if schema_file else None
+        schema_bytes = (schema_path.read_bytes() if schema_path and schema_path.is_file()
+                        and s.workspace.resolve() in schema_path.parents else None)
         checker = FormatChecker(ontology, schema_file, schema_bytes)
-        info = {"endpoint": ep["endpoint"], "topic": topic, "schema": ontology, "internal": ep["internal"]}
+        info = {"endpoint": ep["endpoint"], "dataset": ep["dataset"], "topic": topic, "schema": ontology,
+                "cluster": ep["cluster"]}
 
         stop = asyncio.Event()
         if s.fake_root:

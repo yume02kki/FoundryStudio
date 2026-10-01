@@ -13,6 +13,7 @@ import asyncio
 import posixpath
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 
 import yaml
@@ -112,7 +113,8 @@ class TransformerInfo:
 
 
 class Discovery:
-    def __init__(self, gitlab: GitLab, rust_schema_names: dict[str, str], known_schemas: set[str]):
+    def __init__(self, gitlab: GitLab, rust_schema_names: dict[str, str],
+                 known_schemas: set[str] | Callable[[], set[str]]):
         self.gitlab = gitlab
         self.rust_schema_names = rust_schema_names
         self.known_schemas = known_schemas
@@ -131,8 +133,9 @@ class Discovery:
             warnings.append(f"{where}: not declared")
             return None
         value = str(value)
-        if value not in self.known_schemas:
-            warnings.append(f"{where}: {value!r} is not a schema in foundry's catalog")
+        known = self.known_schemas() if callable(self.known_schemas) else self.known_schemas
+        if value not in known:
+            warnings.append(f"{where}: {value!r} is not a schema in the catalog")
         return value
 
     async def declaration(self, project: str, path: str, commit: str) -> Decl:

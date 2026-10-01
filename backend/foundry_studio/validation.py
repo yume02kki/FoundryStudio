@@ -1,37 +1,43 @@
 """Validation passthrough: every rule and every message comes from deploy.py.
 
-The graph is written to a manifest exactly as Save/Deploy would write it, staged next to
-its schema files, and handed to deploy.load_pipeline. Errors are only *located* here
-(attached to the node or edge they name), never produced.
+The graph is written to a manifest exactly as Save would write it, staged next to the
+workspace's catalog and its schema files, and handed to deploy.load_pipeline. Errors are
+only *located* here (attached to the node or edge they name), never produced.
 """
 
 from __future__ import annotations
 
+import shutil
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 
-from .foundry import Foundry
-from .manifest import SINK, SOURCE, graph_to_manifest
+import yaml
 
-# Returns a schema file's bytes for a manifest-relative path, or None.
-SchemaResolver = Callable[[str], bytes | None]
+from .foundry import Foundry, dataset_node
+from .manifest import catalog_to_yaml, graph_to_manifest, wiring
+
+STAGED_CATALOG = "catalog.yaml"
 
 
-def stage(graph: dict, dest: Path, resolve_schema: SchemaResolver) -> Path:
-    """Write manifest.yaml plus the schema files it references into dest; returns the manifest path."""
+def stage(graph: dict, catalog_path: Path, dest: Path, catalog: dict | None = None) -> Path:
+    """manifest.yaml + catalog.yaml + the schema files the catalog names, in dest; returns the manifest.
+
+    catalog: an edited, unsaved catalog to use instead of the file at catalog_path."""
     dest.mkdir(parents=True, exist_ok=True)
+    if catalog is not None:
+        (dest / STAGED_CATALOG).write_text(catalog_to_yaml(catalog))
+    elif catalog_path.is_file():
+        shutil.copyfile(catalog_path, dest / STAGED_CATALOG)
+    if (dest / STAGED_CATALOG).is_file():
+        raw = yaml.safe_load((dest / STAGED_CATALOG).read_text()) or {}
+        for rel in ((raw.get("Schemas") or {}) if isinstance(raw, dict) else {}).values():
+            src = (catalog_path.parent / str(rel)).resolve()
+            target = (dest / str(rel)).resolve()
+            if src.is_file() and dest.resolve() in target.parents:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, target)
     manifest = dest / "manifest.yaml"
-    manifest.write_text(graph_to_manifest(graph))
-    for rel in (graph.get("schemas") or {}).values():
-        rel = str(rel)
-        target = (dest / rel).resolve()
-        if dest.resolve() not in target.parents:
-            continue  # never write outside the staging dir; deploy.py reports the file as missing
-        data = resolve_schema(rel)
-        if data is not None:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
+    manifest.write_text(graph_to_manifest({**graph, "catalog": STAGED_CATALOG}))
     return manifest
 
 
@@ -40,104 +46,75 @@ class Validator:
         self.foundry = foundry
         self.deploy = foundry.deploy
 
-    def validate(self, graph: dict, resolve_schema: SchemaResolver) -> dict:
+    def _errors(self, e) -> list[dict]:
+        return [self.foundry.locate(m) for m in e.errors]
+
+    def validate(self, graph: dict, catalog_path: Path, catalog: dict | None = None) -> dict:
         manifest_text = graph_to_manifest(graph)
         with tempfile.TemporaryDirectory(prefix="studio-validate-") as tmp:
-            manifest = stage(graph, Path(tmp), resolve_schema)
+            manifest = stage(graph, catalog_path, Path(tmp), catalog)
             try:
                 p = self.deploy.load_pipeline(manifest)
             except self.deploy.ManifestError as e:
-                errors = [self.foundry.locate(m.replace(str(manifest), "manifest.yaml")) for m in e.errors]
-                return {"ok": False, "errors": errors, "manifest": manifest_text,
-                        "topics": self.topics(graph), "summary": None}
-        endpoints = self.deploy.endpoints(p)
-        internal = sorted(k for k in endpoints if k not in self.deploy.SINKS)
-        return {
-            "ok": True, "errors": [], "manifest": manifest_text, "topics": self.topics(graph),
-            "summary": f"{p.name}: OK — {len(p.transformers)} transformers, {len(p.edges)} edges, "
-                       f"2 external sinks, {len(internal)} internal datasets",
-            "internalDatasets": internal,
-        }
+                return {"ok": False, "errors": self._errors(e), "manifest": manifest_text, "summary": None}
+        return {"ok": True, "errors": [], "manifest": manifest_text,
+                "summary": self.deploy.describe(p).splitlines()[0], "sources": p.sources, "sinks": p.sinks}
 
-    def _pipeline(self, graph: dict, edges: list[tuple[str, str]]):
-        d = self.deploy
-        transformers = {}
-        sinks = {SOURCE: {}, SINK: {}}
-        for n in graph.get("nodes", []):
-            if n.get("kind") == "transformer":
-                spec = n.get("transformer") or {}
-                transformers[n["id"]] = d.Transformer(
-                    n["id"], str(spec.get("Repo", "")), str(spec.get("Ref", "")), str(spec.get("Path", "")),
-                    spec.get("IN"), spec.get("OUT"),
-                )
-            elif n["id"] in sinks:
-                sink = n.get("sink") or {}
-                sinks[n["id"]] = {"Ontology": sink.get("Ontology"), "Topic": sink.get("Topic") or ""}
-        return d.Pipeline(
-            name=str(graph.get("name") or "Pipeline"), base_dir=Path("."), schemas={}, defaults={}, order=[],
-            input_sink=sinks[SOURCE], output_sink=sinks[SINK], transformers=transformers, edges=edges,
-        )
+    def validate_catalog(self, catalog: dict, catalog_path: Path) -> dict:
+        """Check an edited catalog (not yet saved) with deploy.load_catalog."""
+        with tempfile.TemporaryDirectory(prefix="studio-catalog-") as tmp:
+            staged = Path(tmp) / STAGED_CATALOG
+            staged.write_text(catalog_to_yaml(catalog))
+            for rel in (catalog.get("schemas") or {}).values():
+                src = (catalog_path.parent / str(rel)).resolve()
+                target = (Path(tmp) / str(rel)).resolve()
+                if src.is_file() and Path(tmp).resolve() in target.parents:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, target)
+            try:
+                self.deploy.load_catalog(staged)
+            except self.deploy.ManifestError as e:
+                return {"ok": False, "errors": self._errors(e)}
+        return {"ok": True, "errors": []}
 
-    def topics(self, graph: dict) -> dict[str, dict]:
-        """The topic each edge carries, per Pipeline.writes_to (internal ones are generated)."""
-        edges = [(e["source"], e["target"]) for e in graph.get("edges", [])]
-        p = self._pipeline(graph, edges)
-        out = {}
-        for u, v in edges:
-            if u != SOURCE and u not in p.transformers:
-                continue
-            ep = p.writes_to(u)
-            if ep in self.deploy.SINKS:
-                topic = (p.input_sink if ep == SOURCE else p.output_sink).get("Topic") or ""
-                out[f"{u}->{v}"] = {"topic": topic, "internal": False}
-            else:
-                out[f"{u}->{v}"] = {"topic": ep, "internal": True}
-        return out
+    def check_edge(self, graph: dict, source: str, target: str, catalog_path: Path,
+                   catalog: dict | None = None) -> dict:
+        """Would adding source -> target be accepted? deploy.py decides; we only add the canvas rules
+        that come from the manifest's shape (an edge is an Input or the Output)."""
+        nodes = {n["id"]: n for n in graph.get("nodes", [])}
+        s, t = nodes.get(source), nodes.get(target)
+        if not s or not t:
+            return {"ok": False, "message": "unknown node"}
+        kinds = (s.get("kind"), t.get("kind"))
+        if kinds == ("transformer", "transformer"):
+            return {"ok": False, "message": f"{source} -> {target}: transformers connect through a dataset; "
+                                            "drop a dataset between them"}
+        if kinds == ("dataset", "dataset"):
+            return {"ok": False, "message": "datasets connect through a transformer"}
 
-    def endpoint(self, graph: dict, node: str) -> dict:
-        """The topic a node writes (for a sink: the sink's own topic), and how to connect to it.
+        edge = [source, target]
+        before = {e["message"] for e in self.validate(graph, catalog_path, catalog)["errors"]}
+        after = self.validate({**graph, "edges": [*graph.get("edges", []), {"source": source, "target": target}]},
+                              catalog_path, catalog)
+        mine = [e for e in after["errors"] if e["edge"] == edge
+                or (e["message"].startswith("Transformers: cycle") and e["message"] not in before)]
+        if mine:
+            return {"ok": False, "message": mine[0]["message"], "errors": mine}
+        return {"ok": True, "message": None}
 
-        Uses deploy.py's Pipeline.writes_to, so a transformer's output is exactly the topic deploy.py
-        generates: <Pipeline>.<Transformer>.out, or OutputSink's topic when it feeds it.
-        """
+    def endpoint(self, graph: dict, node: str, catalog: dict) -> dict:
+        """The dataset a node is (or, for a transformer, writes), and how to connect to it."""
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
         if node not in nodes:
             raise ValueError(f"unknown node {node!r}")
-        edges = [(e["source"], e["target"]) for e in graph.get("edges", [])]
-        ep = node if node in (SOURCE, SINK) else self._pipeline(graph, edges).writes_to(node)
-        if ep in (SOURCE, SINK):
-            sink = nodes.get(ep, {}).get("sink") or {}
-            return {"endpoint": ep, "topic": str(sink.get("Topic") or ""), "schema": sink.get("Ontology"),
-                    "connection": sink.get("ConnectionSettings") or {}, "internal": False}
-        internal = ((graph.get("defaults") or {}).get("InternalDatasets") or {})
-        return {"endpoint": ep, "topic": ep, "schema": (nodes[node].get("transformer") or {}).get("OUT"),
-                "connection": internal.get("ConnectionSettings") or {}, "internal": True}
-
-    def check_edge(self, graph: dict, source: str, target: str) -> dict:
-        """Would adding source -> target be accepted? Uses deploy.py's own graph checks."""
-        existing = [(e["source"], e["target"]) for e in graph.get("edges", [])]
-        prefix = f"Relation '{source} -> {target}'"
-
-        def run(edges):
-            errors: list[str] = []
-            self.deploy.validate_graph(self._pipeline(graph, edges), errors)
-            return errors
-
-        p = self._pipeline(graph, existing)
-        nodes = {SOURCE, SINK, *p.transformers}
-        if source in nodes and target in nodes and source != SINK and target != SOURCE and source != target:
-            emits, expects = p.emits(source), p.expects(target)
-            if emits is None or expects is None:
-                # Not typed yet (e.g. a sink without Ontology): deploy.py will report the missing field.
-                return {"ok": True, "message": None}
-        errors = run(existing + [(source, target)])
-        mine = [e for e in errors if e.startswith(prefix)]
-        if not mine:
-            # Graph-level errors this edge would introduce: a cycle, or a transformer
-            # that would publish to OutputSink and feed internal steps at once.
-            before = set(run(existing))
-            caused = ("Relation: cycle", f"Transformers.{source}: feeds both")
-            mine = [e for e in errors if e.startswith(caused) and e not in before]
-        if mine:
-            return {"ok": False, "message": mine[0], "errors": [self.foundry.locate(m) for m in mine]}
-        return {"ok": True, "message": None}
+        n = nodes[node]
+        outputs = wiring(graph).get(node, {}).get("Outputs") or [None]
+        name = n["dataset"] if n.get("kind") == "dataset" else outputs[0]
+        if not name:
+            raise ValueError(f"{node} doesn't write a dataset yet")
+        ds = (catalog.get("datasets") or {}).get(name)
+        if ds is None:
+            raise ValueError(f"{name} isn't in the catalog")
+        cluster = str(ds.get("Cluster") or "")
+        return {"endpoint": dataset_node(name), "dataset": name, "topic": name, "schema": ds.get("Schema"),
+                "cluster": cluster, "connection": dict((catalog.get("clusters") or {}).get(cluster) or {})}

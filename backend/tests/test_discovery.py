@@ -7,11 +7,13 @@ import pytest
 from foundry_studio import demo
 from foundry_studio.discovery import Discovery, is_transformer_crate, semver_key
 
-from .conftest import SKYWALKER
+from .conftest import SKYWALKER, legacy_rust_crate
+
+SCHEMAS = {"XmlPackets", "EncodedPackets", "Packets"}
 
 
 def discovery(fake, foundry) -> Discovery:
-    return Discovery(fake, foundry.rust_schema_names, set(foundry.schemas))
+    return Discovery(fake, foundry.rust_schema_names, lambda: SCHEMAS)
 
 
 def commit(root, files: dict[str, str], message: str, tag: str | None = None):
@@ -25,43 +27,49 @@ def commit(root, files: dict[str, str], message: str, tag: str | None = None):
         demo._git(repo, "tag", tag)
 
 
-def test_schema_names_come_from_foundry_schemas(foundry):
+def test_rust_schema_names(foundry):
     assert foundry.rust_schema_names == {
         "XmlPacket": "XmlPackets", "EncodedPacket": "EncodedPackets", "Packet": "Packets",
     }
-    assert list(foundry.schemas) == ["XmlPackets", "EncodedPackets", "Packets"]
 
 
 @pytest.mark.anyio
-async def test_discovers_crates_with_fallback_warning(fake, foundry):
+async def test_discovers_csharp_transformers(fake, foundry):
     found = await discovery(fake, foundry).scan_project(SKYWALKER)
     assert set(found) == {f"{SKYWALKER}:XmlToJson", f"{SKYWALKER}:Base64Decoder"}
     x = found[f"{SKYWALKER}:XmlToJson"]
     assert (x.name, x.input, x.output, x.latest) == ("XmlToJson", "XmlPackets", "EncodedPackets", "XmlToJson/v0.4.2")
-    assert x.inferred and "inferred from src/main.rs" in x.warnings[0]
+    assert not x.inferred and not x.warnings and x.description.startswith("Converts XML")
     assert x.repo == "https://gitlab.com/yume02kki/skywalker.git"
     assert [v.kind for v in x.versions] == ["tag", "branch"]
     assert x.versions[-1].ref == x.head and len(x.head) == 40
 
 
 @pytest.mark.anyio
+async def test_legacy_rust_crates_with_fallback_warning(demo_root, fake, foundry):
+    commit(demo_root, {f"Legacy/{k}": v for k, v in legacy_rust_crate("Legacy", "Packets", "Packets").items()},
+           "legacy crate")
+    legacy = (await discovery(fake, foundry).scan_project(SKYWALKER))[f"{SKYWALKER}:Legacy"]
+    assert (legacy.input, legacy.output) == ("Packets", "Packets")
+    assert legacy.inferred and "inferred from src/main.rs" in legacy.warnings[0]
+
+
+@pytest.mark.anyio
 async def test_transformer_yaml_wins_and_versions_sort_by_semver(demo_root, fake, foundry):
     commit(demo_root, {"XmlToJson/transformer.yaml":
                        "name: XmlToJson\nin: XmlPackets\nout: EncodedPackets\ndescription: XML to JSON\n"},
-           "declare XmlToJson", tag="XmlToJson/v0.10.0")
-    commit(demo_root, {"XmlToJson/src/x.rs": "// pre\n"}, "pre", tag="XmlToJson/v0.10.1-rc.1")
-    commit(demo_root, {"XmlToJson/src/y.rs": "// other\n"}, "unrelated tag", tag="XmlToJsonExtra/v9.9.9")
+           "describe XmlToJson", tag="XmlToJson/v0.10.0")
+    commit(demo_root, {"XmlToJson/x.cs": "// pre\n"}, "pre", tag="XmlToJson/v0.10.1-rc.1")
+    commit(demo_root, {"XmlToJson/y.cs": "// other\n"}, "unrelated tag", tag="XmlToJsonExtra/v9.9.9")
     found = await discovery(fake, foundry).scan_project(SKYWALKER)
     x = found[f"{SKYWALKER}:XmlToJson"]
     assert not x.inferred and x.description == "XML to JSON"
     assert [v.label for v in x.versions if v.kind == "tag"] == ["v0.10.1-rc.1", "v0.10.0", "v0.4.2"]
-    old = next(v for v in x.versions if v.label == "v0.4.2")
-    assert old.source == "src/main.rs" and old.warnings  # that tag predates transformer.yaml
 
 
 @pytest.mark.anyio
 async def test_unknown_types_and_non_transformer_crates(demo_root, fake, foundry):
-    files = demo.crate_files("Custom", "Mystery", "Packets")
+    files = legacy_rust_crate("Custom", "Mystery", "Packets")
     commit(demo_root, {f"tools/Custom/{k}": v for k, v in files.items()} | {
         "tools/cli/Cargo.toml": '[package]\nname = "cli"\nversion = "0.1.0"\n\n[dependencies]\nserde = "1"\n',
         "Cargo.toml": '[workspace]\nmembers = ["XmlToJson"]\n',
@@ -80,16 +88,17 @@ async def test_any_language_with_transformer_yaml(demo_root, fake, foundry):
         "PacketEraser/PacketEraser.csproj": "<Project Sdk=\"Microsoft.NET.Sdk\" />\n",
         "PacketEraser/Dockerfile": "FROM scratch\n",
         "PacketEraser/bin/Release/transformer.yaml": "name: build output, not a transformer\n",
-        "Shout/transformer.yaml": "name: Shout\nin: Packets\nout: Packets\n",
+        "Shout/transformer.yaml": "name: Shout\nin: Packets\nout: Bogus\n",
         "Shout/pyproject.toml": "[project]\nname = \"shout\"\n",
     }, "C# and Python transformers")
     found = await discovery(fake, foundry).scan_project(SKYWALKER)
-    for name in ("PacketEraser", "Shout"):
-        t = found[f"{SKYWALKER}:{name}"]
-        assert t.name == name and (t.input, t.output) == ("Packets", "Packets")
-        assert not t.inferred and not t.warnings
+    t = found[f"{SKYWALKER}:PacketEraser"]
+    assert t.name == "PacketEraser" and (t.input, t.output) == ("Packets", "Packets")
+    assert not t.inferred and not t.warnings
+    shout = found[f"{SKYWALKER}:Shout"]
+    assert shout.warnings == ["transformer.yaml out: 'Bogus' is not a schema in the catalog"]
     assert f"{SKYWALKER}:PacketEraser/bin/Release" not in found
-    assert f"{SKYWALKER}:XmlToJson" in found  # Rust crates are still found
+    assert f"{SKYWALKER}:XmlToJson" in found
 
 
 @pytest.mark.anyio

@@ -17,14 +17,15 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
   const validation = useStudio((s) => s.validation);
   const focus = useStudio((s) => s.focus);
   const nodes = useStudio((s) => s.nodes);
+  const catalog = useStudio((s) => s.catalog);
 
   const sourceNode = nodes.find((n) => n.id === source)?.data.spec;
-  const color = schemaColor(emits(sourceNode));
+  const color = schemaColor(emits(sourceNode, catalog));
   const errors = issuesFor(validation, undefined, [source, target]);
   const focused = focus?.edges.includes(id);
   const stroke = errors.length ? "var(--error)" : color;
 
-  const flow = useEdgeFlow(source);
+  const flow = useEdgeFlow(source, target);
 
   return (
     <>
@@ -61,12 +62,12 @@ export function DragTooltip() {
   const flow = useReactFlow();
   if (!connection.inProgress || connection.isValid !== false || !connection.toNode) return null;
   if (connection.toNode.id === connection.fromNode.id) return null;
-  const graph = useStudio.getState().graph();
+  const st = useStudio.getState();
   const [s, t] =
     connection.fromHandle.type === "source"
       ? [connection.fromNode.id, connection.toNode.id]
       : [connection.toNode.id, connection.fromNode.id];
-  const check = checkConnection(graph, s, t);
+  const check = checkConnection(st.graph(), st.catalog, s, t);
   if (check.ok) return null;
   const at = flow.flowToScreenPosition(connection.to);
   return (

@@ -1,16 +1,55 @@
 # Foundry Studio
 
-A visual pipeline builder for the foundry GitOps pipelines, in the spirit of Palantir Foundry's
-Pipeline Builder. Browse transformers in an asset panel, drag them onto a canvas, wire
-**Source → transformers → Output**, and deploy. GitLab is watched live, so a transformer that's
-committed and pushed shows up (or shows an update) without a reload.
+A visual pipeline builder for foundry pipelines, in the spirit of Palantir Foundry's Pipeline
+Builder. Pipelines are defined by manifest YAML; Studio only edits and displays it, and Deploy
+hands the saved manifest to foundry's `deploy.py`.
+
+On the canvas, **datasets** (registered Kafka topics from the shared catalog) and
+**transformers** are both nodes: `dataset → transformer → dataset`. A dataset can feed several
+transformers, a transformer can read and write several datasets, and several transformers can
+write one dataset. GitLab is watched live: any project with a `transformer.yaml` in a folder
+shows up as a transformer, without a reload.
 
 ![Foundry Studio](docs/screenshot.png)
 
 - **Backend:** Python + FastAPI (`backend/`). It imports foundry's `deploy.py` as a library, so the
   UI and the CLI can't disagree about what a valid pipeline is.
 - **Frontend:** React + TypeScript + Vite, with React Flow (`@xyflow/react`) for the canvas (`frontend/`).
-- **foundry** is pinned as a git submodule at `vendor/foundry` (commit `b126193`, foundry `main`).
+- **foundry** is pinned as a git submodule at `vendor/foundry`.
+
+## The model
+
+Topics live on shared clusters and are registered by hand; many services read the same topic,
+each in its own consumer group. So nothing here creates a topic. Two kinds of file describe
+everything:
+
+```yaml
+# workspace/catalog.yaml: shared by every pipeline
+Clusters:
+  upstream: {Brokers: upstream-kafka:9092, SecurityProtocol: SASL_SSL, SaslMechanism: SCRAM-SHA-512, SecretRef: upstream-kafka-creds}
+Schemas:
+  XmlPackets: schemas/xml_packets.yaml
+Datasets:                      # registered topics, by their real name
+  raw.xml: {Cluster: upstream, Schema: XmlPackets}
+```
+
+```yaml
+# workspace/SWpipeline/manifest.yaml
+Name: SWpipeline
+Catalog: ../catalog.yaml
+Transformers:
+  XmlToJson:
+    Repo: https://gitlab.com/yume02kki/skywalker.git
+    Path: XmlToJson
+    IN: XmlPackets             # transformer.yaml's in/out; must match the datasets' schemas
+    OUT: EncodedPackets
+    Inputs: [raw.xml]
+    Output: SWpipeline.XmlToJson.out      # or a list: every output record goes to each
+```
+
+The consumer group of a transformer is `<ConsumerGroup or Name>.<transformer>`. `ConsumerGroup`
+can be set per pipeline or per transformer. See foundry's `catalog.yaml`, `PipelineManifest.yaml`
+and `deploy.py` for the full format.
 
 ## Quick start
 
@@ -19,34 +58,60 @@ Requirements: Python ≥ 3.11 with [uv](https://docs.astral.sh/uv/), Node ≥ 20
 ```sh
 make setup                          # submodule + Python and Node dependencies
 
-export GITLAB_TOKEN=glpat-…         # see "GitLab token" below
+export GITLAB_TOKEN=glpat-…         # read_api + read_repository
+export STUDIO_WORKSPACE=~/pipelines # your catalog.yaml + one folder per pipeline (a git checkout, ideally)
+export STUDIO_DEPLOY_TARGET=~/pipelines/target.yaml   # where Deploy runs pipelines (see below)
 make dev                            # backend :8000 + frontend :5173, both auto-reloading
 ```
 
-Open <http://127.0.0.1:5173>. `make dev` runs `scripts/dev.sh`, which starts both servers and
-stops them together on Ctrl-C.
+Open <http://127.0.0.1:5173>. A workspace without a `catalog.yaml` starts with foundry's example
+catalog, its schemas and SWpipeline.
 
-### Offline demo (no token)
+### Offline demo (no token, no Docker, no Kafka)
 
 ```sh
 make demo
 ```
 
-The demo serves local git repositories that stand in for skywalker and PipelineDeploys
-(`.demo-gitlab/`). PipelineDeploys/SWpipeline in the demo is rendered by the real `deploy.py` from
-foundry's `PipelineManifest.yaml`, and Deploy really runs `deploy.py deploy --pr` against it. To
-see the live updates, "push" from another terminal:
+The demo serves a local git repo standing in for skywalker (C# transformers with the same shape
+as real ones), a workspace, and a deploy target with `Runner: none`: deploys are recorded, with
+history and rollback, and print the docker commands they would run. Live data shows generated
+records, labelled **demo data**. To see live updates, "push" from another terminal:
 
 ```sh
 cd backend
-uv run python -m foundry_studio.demo tag Base64Decoder v0.4.3       # update badge appears
-uv run python -m foundry_studio.demo add Deduplicate Packets Packets  # a new card appears
-uv run python -m foundry_studio.demo ci 1 failed                     # MR chip turns red
-make demo-reset                                                      # start over
+uv run python -m foundry_studio.demo tag Base64Decoder v0.4.3        # update badge appears
+uv run python -m foundry_studio.demo add Deduplicate Packets Packets   # a new card appears
+make demo-reset                                                       # start over
 ```
 
-The skywalker crates in the demo are stand-ins with the same shape as the real ones (the real
-repo is private), so their commit SHAs and image tags differ from production.
+## Deploying pipelines
+
+**Deploy** saves (the pipeline and any catalog edits), then runs `deploy.py deploy` on the saved
+manifest against the target in `STUDIO_DEPLOY_TARGET`, streaming its log into the deploy panel:
+
+1. validate the manifest against the catalog;
+2. check every dataset's topic exists on its cluster (read-only; it never creates one);
+3. vendor each transformer at its pinned commit and build its image, or reuse one built from the
+   same source (and push it, if the target names a registry);
+4. run one container per transformer as a Docker Compose project, removing dropped ones;
+5. record the deploy: who, when, each transformer's commit and image.
+
+The panel lists the recorded deploys. **Roll back** runs an earlier one again, exactly as recorded;
+**Stop** takes the pipeline's containers down. The top bar shows the pipeline's current deploy.
+
+The target file (foundry's `target.example.yaml`):
+
+```yaml
+Registry: registry.gitlab.com/yume02kki/pipelinedeploys   # optional: push images here
+Network: kafka                 # Docker network the containers join
+SecretsDir: /etc/foundry/secrets   # <SecretRef>/username and /password, mounted read-only
+StateDir: ~/.local/state/foundry   # deploy history
+Runner: docker                 # or none
+CheckTopics: true
+```
+
+The same commands work without Studio: `deploy.py deploy|status|history|rollback|stop`.
 
 ## GitLab token
 
@@ -56,16 +121,12 @@ asks (`backend/foundry_studio/gitenv.py`).
 
 | Scope | Needed for |
 |---|---|
-| `read_api` | Discovery, watching (events, tags, merge requests, CI status), loading pipelines |
-| `read_repository` | `deploy.py` cloning transformer repos at their pinned Ref (Validate needs no clone) |
-| `write_repository` | Deploy: pushing the `deploy/<Name>/<id>` branch to PipelineDeploys |
-| `api` | Deploy: opening the merge request |
+| `read_api` | Listing your projects, discovery, watching (events, tags) |
+| `read_repository` | `deploy.py` cloning transformer repos at their pinned Ref |
 
-A personal access token with `read_api` and `read_repository` is enough to browse and validate.
-Add `write_repository` and `api` to deploy. Nothing is written to GitLab except when you click
-**Deploy**. **Save** writes locally (see below).
+Studio never writes to GitLab. **Save** writes the workspace; commit it with git as you like.
 
-## Deploying to a server
+## Running Studio on a server
 
 ```sh
 scripts/deploy_server.sh ubuntu@<host>          # from your machine, in this checkout
@@ -73,219 +134,85 @@ ssh -N -L 8000:127.0.0.1:8000 ubuntu@<host>      # then open http://localhost:80
 ```
 
 The script builds the frontend, copies the app to `/opt/foundry-studio` with rsync, installs `uv`
-and the backend's dependencies, and runs it as the `foundry-studio` systemd service. Studio has
-no login, so the service listens on **127.0.0.1 only**. Reach it through the SSH tunnel; don't
-expose port 8000 publicly. The token goes in `/etc/foundry-studio.env` (mode 600,
-`GITLAB_TOKEN=…`). The script creates that file but never sends a token. Re-run the script to
-update.
+and the backend's dependencies, and runs it as the `foundry-studio` systemd service on
+**127.0.0.1 only** (Studio has no login). Settings go in `/etc/foundry-studio.env` (mode 600):
+`GITLAB_TOKEN`, `STUDIO_DEPLOY_TARGET`. The script creates that file but never sends a token.
 
 ## Configuration
-
-All configuration comes from environment variables; the defaults fit the yume02kki projects.
 
 | Variable | Default | |
 |---|---|---|
 | `GITLAB_TOKEN` | – | See above |
 | `GITLAB_URL` | `https://gitlab.com` | Self-hosted GitLab works too |
-| `STUDIO_TRANSFORMER_PROJECTS` | `yume02kki/skywalker` | Comma-separated projects to scan for transformer crates |
-| `STUDIO_DEPLOYS_PROJECT` | `yume02kki/PipelineDeploys` | The GitOps repo |
-| `STUDIO_DEPLOYS_BASE` | `main` | Branch deploys are made against |
+| `STUDIO_TRANSFORMER_PROJECTS` | every project you're a member of | Or a comma-separated list of projects |
+| `STUDIO_WORKSPACE` | `./workspace` | The catalog and the pipelines Studio edits |
+| `STUDIO_DEPLOY_TARGET` | – | foundry target file; Deploy is disabled without it |
 | `STUDIO_POLL_INTERVAL` | `10` | Seconds between polls |
-| `STUDIO_FULL_RESCAN_INTERVAL` | `300` | Full rescan even without events |
+| `STUDIO_FULL_RESCAN_INTERVAL` | `300` | Full rescan of every project even without events |
 | `GITLAB_WEBHOOK_SECRET` | – | Enables `/api/webhooks/gitlab` |
-| `STUDIO_WORKSPACE` | `./workspace` | Where Save writes drafts |
 | `STUDIO_FAKE_GITLAB` | – | `demo`, or a directory of local repos (tests, e2e) |
-| `STUDIO_KAFKA_CLUSTERS` | – | YAML file mapping the manifest's sink `Brokers` to where they really are, in the watcher's `clusters:` format (a watcher.yaml works); without it Live data connects to the manifest's settings as written |
-| `FOUNDRY_SECRETS_DIR` | `/var/run/secrets/foundry` | Kafka credentials for Live data: `<dir>/<SecretRef>/username` and `/password`, as the transformer runtime reads them |
+| `STUDIO_KAFKA_CLUSTERS` | – | YAML `clusters: [{match: <catalog Brokers>, connection: {…}}]`, for when the brokers are reached differently from this machine (Live data only) |
+| `FOUNDRY_SECRETS_DIR` | `/var/run/secrets/foundry` | Kafka credentials for Live data: `<dir>/<SecretRef>/username` and `/password` |
 | `FOUNDRY_DIR` | `./vendor/foundry` | Use another foundry checkout |
 
-## Real-time updates
+## Transformer discovery and real-time updates
 
-The watcher always **polls**, which is what you get on localhost, where GitLab can't reach you.
-Every `STUDIO_POLL_INTERVAL` seconds (10 by default) it reads each project's events API, plus
-`last_activity_at`. GitLab only refreshes `last_activity_at` about once an hour, so it's only a
-backstop. A push or tag event on a transformer project triggers a rescan. The rescan is diffed
-against the previous one and sent to the browser over Server-Sent Events (`/api/events`):
-
-- `transformer.added`, `transformer.updated` (with any new version tags), `transformer.removed`
-- `mr.updated`: the latest PipelineDeploys merge request and its CI status
-- `pipelines.changed`: PipelineDeploys' default branch moved
-
-A new tag reaches the browser within one poll interval plus the rescan, so about 10–15 s.
-
-### Webhooks (optional, faster)
-
-When GitLab can reach the backend (a deployed instance, or a tunnel such as
-`ngrok http 8000`), add a webhook to **skywalker** and **PipelineDeploys**:
-
-1. Pick a secret and start the backend with `GITLAB_WEBHOOK_SECRET=<secret>`.
-2. In GitLab, open the project's **Settings → Webhooks → Add new webhook**:
-   - URL: `https://<your host>/api/webhooks/gitlab`
-   - Secret token: `<secret>` (it arrives as `X-Gitlab-Token` and is compared in constant time)
-   - Triggers: **Push events**, **Tag push events**, **Merge request events**, **Pipeline events**
-3. Use **Test → Push events** in GitLab. It should get `202`, and the live chip in the top bar
-   switches to `webhook+polling`.
-
-Webhook deliveries trigger the same rescans as polling, which stays on as a safety net.
-
-## Live data
-
-Press **Live data** in the top bar. Studio follows every topic of the pipeline (the Source, each
-transformer's output and the Output) and the canvas comes alive:
-
-- connections animate while data flows through the topic they carry;
-- each transformer shows `N in → M out/min` and how many records it dropped; the sinks show their rate;
-- the **Overview** in the bottom panel lists every stage with its status, rates, drops and last
-  message. A transformer that receives input but produces nothing is flagged **Not producing**.
-
-Then click to drill in. A **node** shows its data, a **connection** shows the messages on its topic,
-and **empty canvas** goes back to the Overview. The stage strip above the panel does the same.
-
-- **A transformer** shows its input records next to its output records. They're matched by record
-  key: the Kafka key, which foundry-schemas sets to the packet `guid`, or else a `guid`/`id` field in
-  the payload. Each row says whether the record was transformed, is still pending, or was **dropped**
-  (no output after 5 s; Base64Decoder drops packets that aren't UTF-8 text). It also shows what
-  changed, e.g. `XML→JSON`, or `data` from base64 to text. Click a row for the field-by-field diff and
-  both payloads side by side. The header shows in/min, out/min, transformed and dropped counts.
-- **Source / Output** show that topic's messages.
-- **Status:** **Flowing · N/min** means messages were produced in the last minute. **Quiet** means
-  connected, but nothing recent. **Error** means, e.g., brokers unreachable or authentication failed.
-  It keeps retrying, so it recovers by itself. Each node on the canvas shows the status of the topic
-  it writes.
-- Every message is checked against its topic's schema: the sink's Ontology, or the transformer's
-  `OUT` for internal topics, field by field as foundry's YAML schemas define (`format` + `fields`,
-  e.g. `guid: uuid`, `data: base64`): exactly those fields, each of its type. Older pipelines' JSON
-  Schema files are validated too; XSDs get a well-formedness check.
-
-A transformer's input and output topics come from deploy.py's `endpoint_id`. Internal topics
-(`<Pipeline>.<Transformer>.out`) use `Defaults.InternalDatasets.ConnectionSettings`; the sinks use
-their own.
-
-It shows the last few messages of each partition, then follows new ones. It's **read-only**: Studio
-assigns partitions directly under a throwaway group id. It never joins the pipeline's `ConsumerGroup`,
-which would take partitions away from the real consumers, and never commits offsets. The connection
-settings are mapped exactly as the transformer runtime maps them (`backend/foundry_studio/peek.py`).
-SASL credentials come from `$FOUNDRY_SECRETS_DIR/<SecretRef>/username` and `/password` (for SWpipeline: the
-upstream, downstream and `kafka-internal-creds` secrets):
-
-```sh
-mkdir -p ~/.foundry-secrets/upstream-kafka-creds ~/.foundry-secrets/downstream-kafka-creds
-printf '%s' 'user' > ~/.foundry-secrets/upstream-kafka-creds/username   # likewise password, downstream
-export FOUNDRY_SECRETS_DIR=~/.foundry-secrets
-```
-
-The machine running the backend must be able to reach the brokers (e.g. `upstream-kafka:9092`,
-`kafka-internal:9092`).
-In demo mode the feeds show generated sample messages, labelled **demo data**.
-
-## How it works
-
-### deploy.py is the source of truth
-
-`backend/foundry_studio/foundry.py` imports `vendor/foundry/deploy.py` with importlib.
-`load_pipeline` and `ManifestError` drive validation, `render` and `deploy` drive Deploy, and
-`endpoint_id` names the internal topics. Nothing re-implements a rule:
-
-- **Validate:** the graph is written as a manifest exactly as Deploy would write it, staged next to
-  its schema files, and passed to `deploy.load_pipeline`. The top bar shows deploy.py's errors
-  verbatim. Clicking one selects and zooms to the node or edge it names.
-- **Wiring:** while you drag a wire, compatible ports light up and incompatible ones dim, with a
-  tooltip such as `XmlToJson emits EncodedPackets but OutputSink expects Packets`. This uses a small
-  client-side mirror of the per-edge rules (`frontend/src/lib/rules.ts`) because it runs on every
-  mouse move. When you drop the wire, the backend asks deploy.py (`/api/check-edge` runs
-  `_validate_graph` on the candidate edge) and refuses with deploy.py's exact message, e.g.
-  `Relation 'XmlToJson -> OutputSink': type mismatch — XmlToJson emits EncodedPackets but OutputSink expects Packets`.
-- **Deploy** runs `deploy.deploy(manifest, PipelineDeploys, base="main", push=True, pr=True)`, the
-  same as `deploy.py deploy --repo … --pr`, and reports the merge request URL, or
-  "already up to date". `deploy.py` opens the MR with `glab`. If `glab` isn't installed, the backend
-  puts a small stand-in on its own `PATH` that implements `glab mr create` with the GitLab API.
-
-### The manifest
-
-The manifest format is the contract with deploy.py, and Studio doesn't extend it. The UI graph is
-the manifest's own sections plus nodes and edges for `Transformers` and `Relation`
-(`backend/foundry_studio/manifest.py`).
-
-Manifests are written in one **canonical form**: the layout and comments of foundry's
-`PipelineManifest.yaml`, transformers and edges in topological order (ties broken by name, as in
-deploy.py), and connection keys in the runtime's documented order. The same pipeline therefore
-always produces the same bytes, however it was dragged and wired. That makes the `deploy.py render`
-of a rebuilt SWpipeline byte-identical to the deployed one, so its Deploy is a no-op. The cost is
-that hand-written comments in a loaded manifest aren't preserved.
-
-Internal datasets (`<Pipeline>.<Transformer>.out`) and the pipeline-level settings (`Registry`,
-`Defaults.InternalDatasets`, `Schemas`) aren't shown or edited in the UI. They come from the loaded
-manifest, or for a new pipeline from foundry's example manifest, and are written back unchanged. The
-pipeline's name is edited in place in the top bar. Click a connection to see and edit its Kafka connection settings: InputSink's
-or OutputSink's own for the sink topics, or `Defaults.InternalDatasets.ConnectionSettings` (shared by all
-internal topics) for connections between transformers. Sinks have a `SecretRef` field and no password
-field, and deploy.py rejects credential-like keys anyway.
-
-### Save, drafts and layout
-
-**Save** writes a local draft:
-
-```
-workspace/<Name>/manifest.yaml
-workspace/<Name>/<Name>.layout.json     # node positions: the sidecar, not in the manifest
-workspace/<Name>/schemas/…               # so `deploy.py validate workspace/<Name>/manifest.yaml` works as-is
-```
-
-Save deliberately doesn't commit into `PipelineDeploys/<Name>/`. That folder is deploy.py's
-rendered output, and `deploy.py check` in its CI fails on any file that isn't in
-`pipeline.lock.yaml`, which would include a hand-written manifest or a layout file. Getting a
-pipeline into PipelineDeploys is Deploy's job (a merge request). Pipelines loaded from
-PipelineDeploys without a draft are auto-laid out left to right.
-
-### Transformer discovery
-
-Each configured project is scanned for folders whose `Cargo.toml` depends on `foundry-transformer`.
-A crate's versions are its `<Path>/v*` tags (newest semver first) plus the last default-branch
-commit that touched its folder.
-
-In/Out schemas come from **`transformer.yaml`** in the crate:
+Studio lists every project the token's user is a member of (re-listed every minute, so new
+projects show up on their own) and scans each for folders with a **`transformer.yaml`**:
 
 ```yaml
 name: XmlToJson
-in: XmlPackets          # the Schema::NAME used in the manifest
+in: XmlPackets
 out: EncodedPackets
 description: Converts <packet> XML to JSON; data stays base64-encoded.
 ```
 
-Until a crate has one, Studio parses `type In = X;` / `type Out = Y;` in `src/main.rs` (or
-`src/lib.rs`) and maps the Rust type to its schema name through `impl Schema for … { const NAME }`
-in the pinned foundry-schemas. Transformers found this way carry a **⚠ inferred** badge.
+A transformer's versions are its `<Path>/v*` tags (newest semver first) plus the last
+default-branch commit that touched its folder. Rust crates from before `transformer.yaml` are
+still found; their types are inferred and marked **⚠ inferred**.
 
-A transformer's `Ref` is optional (foundry: no `Ref` means the repo's default branch; the lock
-file pins the commit at deploy). Dragging a card adds it without a `Ref`. To pin a tag or a commit,
-use the node's Version in the Inspector, which also offers "Default branch (latest)" to unpin.
+Projects with transformers are **polled** every `STUDIO_POLL_INTERVAL` seconds (the events API);
+every project is rescanned every `STUDIO_FULL_RESCAN_INTERVAL`. Changes reach the browser over
+Server-Sent Events (`/api/events`): `transformer.added`, `transformer.updated` (with new version
+tags), `transformer.removed`. A new tag shows up within about 10–15 s.
 
-A canvas node is matched to its discovered transformer by `Repo` + `Path`. When a node is pinned and
-a newer version exists, it shows an update badge. Click it to open the version picker.
+**Webhooks** (optional, faster): when GitLab can reach the backend, add a project or group webhook
+to `https://<host>/api/webhooks/gitlab` with a secret token, start the backend with
+`GITLAB_WEBHOOK_SECRET=<secret>`, and enable **Push** and **Tag push** events. A push from a project
+Studio hasn't listed yet makes it list projects again. Polling stays on as a safety net.
 
-## Changes proposed upstream
+## Building pipelines
 
-Studio works against foundry, skywalker and PipelineDeploys as they are. Two small merge requests
-make it better. Their content is kept in `upstream/`:
+- **Transformers** tab: drag a card onto the canvas. It's added without a `Ref` (its default
+  branch; the deploy record pins the commit). Pin a tag in the Inspector; a pinned node shows an
+  update badge when a newer tag exists.
+- **Datasets** tab: the catalog by cluster. Drag a dataset onto the canvas (or double-click it),
+  register a new one (**+ Dataset**), or add a cluster.
+- **Wiring:** drag from a port to a port. Compatible ports light up while dragging; a refused wire
+  says why in deploy.py's words, e.g. `XmlToJson emits EncodedPackets but packets.decoded carries
+  Packets`. Transformers connect only through datasets.
+- **Inspector:** a transformer's version, reads, writes and consumer group; a dataset's cluster,
+  schema (with its fields) and description; a connection's topic and consumer group. A dataset or
+  connection also shows its **cluster's connection settings**, shared by every dataset on it
+  (`SecretRef`, never a password). Catalog edits are saved with **Save**.
+- **Validation** runs deploy.py on every change; the top bar shows its errors verbatim, and
+  clicking one zooms to the node or connection it's about.
 
-| Repo | Merge request | Change | Why |
-|---|---|---|---|
-| foundry | [foundry!1](https://gitlab.com/yume02kki/foundry/-/merge_requests/1) | `deploy.locate()` + `ManifestError.issues` | Says which node or edge each error is about, next to the messages. CLI output is unchanged (verified byte for byte). Optional: Studio carries the same parser and prefers `deploy.locate` when present. |
-| skywalker | [skywalker!1](https://gitlab.com/yume02kki/skywalker/-/merge_requests/1) | `transformer.yaml` for XmlToJson and Base64Decoder, plus a README note | Declares In/Out, which removes the ⚠ inferred badge. Only new tags change their content hash; v0.4.2 is unaffected. |
+The manifest and the catalog are written in one **canonical form** (foundry's layout and comments,
+transformers in topological order), so the same pipeline always produces the same bytes however it
+was dragged and wired. Node positions go to `<Name>/<Name>.layout.json`, next to the manifest.
 
-Each folder has a `MERGE_REQUEST.md` with the full rationale. `scripts/open_upstream_mrs.py` opened
-them (new branches and merge requests only, never `main`); it refuses to run again while the
-branches exist:
+## Live data
 
-```sh
-GITLAB_TOKEN=… python3 scripts/open_upstream_mrs.py         # dry run: clones, applies, shows the diff
-GITLAB_TOKEN=… python3 scripts/open_upstream_mrs.py --yes   # pushes branches and opens the MRs
-```
+Press **Live data** in the top bar. Studio follows every dataset on the canvas: connections
+animate while data flows, transformers show `N in → M out/min` and how many records they dropped,
+and the **Overview** lists every stage. Click to drill in: a transformer shows its input records
+next to its output records (matched by Kafka key or `guid`, with a field-by-field diff), a dataset
+or connection shows its messages. Every message is checked against its dataset's schema.
 
-After the foundry MR merges, bump the submodule with
-`git -C vendor/foundry checkout <commit> && git add vendor/foundry`.
-
-The manifest format, deploy.py's CLI, the SDK and the PipelineDeploys layout are unchanged.
+It's **read-only**: Studio assigns partitions under a throwaway group id, never joins a
+transformer's consumer group, and never commits offsets. Connection settings come from the
+catalog and are mapped exactly as the transformer runtime maps them (`peek.py`).
 
 ## Tests
 
@@ -294,46 +221,40 @@ make test     # backend pytest + frontend typecheck and vitest
 make e2e      # Playwright, against a fresh offline demo
 ```
 
-- **Backend** (`backend/tests`, 51 tests), using the git-backed fake GitLab:
-  - discovery: transformer.yaml vs inferred, semver ordering, non-transformer crates
-  - the manifest round trip, byte-identical, including rebuilds in a dozen drag/wire orders
-  - `deploy.py render` of a rebuilt SWpipeline being byte-identical to the deployed tree, and its
-    deploy being "already up to date"
-  - validation passthrough, comparing against the `deploy.py validate` CLI case by case
-  - the watcher: new tag, new or removed folder, MR CI changes, webhooks and the token check
-  - Live data: connection-setting parity with the runtime, schema checks, and the stream stopping when
-    the browser disconnects. Against a real broker (run when `STUDIO_TEST_KAFKA` is set) it also covers
-    SCRAM auth via SecretRef, history then live messages, bad credentials, unreachable brokers, and the
-    pipeline's consumer group offsets staying untouched.
-- **Frontend** (`frontend/src/**/*.test.ts`): connection type rules, version and update logic, feed health.
-- **End-to-end** (`frontend/e2e`):
-  - AC1: SWpipeline draws with the right schema on each port
-  - AC3: XmlToJson → OutputSink is refused with deploy.py's message
-  - AC2: rebuild in the UI, Deploy reports "already up to date"
-  - AC4–6: tag push → update badge, new folder → card, Deploy → MR chip running → failed → passed
-  - Live data: each transformer's input paired with its output (format change, changed fields,
-    dropped records), and the sink feeds
+- **Backend** (`backend/tests`): the manifest and catalog round trip (byte-identical, in any drag
+  and wire order, with several inputs and outputs); validation compared against the `deploy.py
+  validate` CLI case by case; deploys with history, rollback and stop; discovery across every
+  project; the watcher (new project, new tag, new folder, webhooks); Live data, and against a real
+  broker when `STUDIO_TEST_KAFKA` is set.
+- **Frontend** (`frontend/src/**/*.test.ts`): wiring rules, stages and record pairing, versions, feed health.
+- **End-to-end** (`frontend/e2e`): SWpipeline draws with the right schema on each port; a wrong
+  schema is refused with deploy.py's message; fan-out and fan-in; cluster edits saved to the
+  catalog; a rebuilt SWpipeline is byte-identical and deploys; live tags, transformers, deploy
+  history and rollback; Live data.
+
+foundry's own tests (`vendor/foundry/tests`, `sdk/dotnet`) cover `deploy.py` and the C# SDK.
 
 ## Layout
 
 ```
 backend/foundry_studio/
-  app.py           FastAPI routes, SSE, webhook
-  foundry.py       deploy.py loader, schema catalog, error locator
-  manifest.py      graph <-> manifest (canonical writer)
-  validation.py    staging + deploy.load_pipeline, edge checks, topic names
-  discovery.py     transformer crates, versions, transformer.yaml / inference
-  watcher.py       polling + webhooks -> event bus
-  pipelines.py     list / load / save drafts / deploy
+  app.py           FastAPI routes, SSE (events, deploy logs, live data), webhook
+  foundry.py       deploy.py loader, error locator
+  manifest.py      graph <-> manifest, catalog <-> catalog.yaml (canonical writers)
+  validation.py    staging + deploy.load_pipeline, edge checks, dataset endpoints
+  pipelines.py     the workspace: catalog, pipelines, deploys
+  discovery.py     transformer.yaml folders, versions, inference for old Rust crates
+  watcher.py       every member project: polling + webhooks -> event bus
   peek.py          Live data: read-only topic feeds, schema checks
   gitlab.py        GitLab REST client
   fake_gitlab.py   GitLab look-alike on local git repos (tests, demo)
-  gitenv.py        git credential helper, glab stand-in
-  demo.py          offline demo repos + CLI
+  gitenv.py        git credential helper
+  demo.py          offline demo + CLI
 frontend/src/
-  components/      Canvas, PipelineNode, TopicEdge, AssetBrowser, Inspector, TopBar, LiveData, Dialogs
-  lib/             rules (wiring), versions, layout, feed health, stages/pairing/diff, schema colours
+  components/      Canvas, PipelineNode (transformer + dataset), TopicEdge, AssetBrowser, Datasets,
+                   Inspector, TopBar, LiveData, Dialogs (deploy panel)
+  lib/             rules (wiring), stages/pairing/diff, versions, layout, feed health, schema colours
   store.ts         zustand store
-upstream/          merge requests for foundry and skywalker
-vendor/foundry     foundry @ b126193 (submodule)
+upstream/          merge request material for foundry and skywalker
+vendor/foundry     foundry (submodule)
 ```

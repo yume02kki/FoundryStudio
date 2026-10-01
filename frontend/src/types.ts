@@ -1,18 +1,15 @@
-// Shapes shared with the backend. The graph is the manifest's own sections plus
-// nodes/edges for Transformers and Relation; see backend/foundry_studio/manifest.py.
+// Shapes shared with the backend; see backend/foundry_studio/manifest.py.
+//
+// On the canvas, transformers and datasets (registered Kafka topics from the shared
+// catalog) are both nodes. An edge dataset -> transformer is one of the transformer's
+// Inputs; transformer -> dataset is its Output.
 
-export const SOURCE = "InputSink";
-export const SINK = "OutputSink";
+export const DATASET = "dataset:";
+export const datasetNode = (name: string) => `${DATASET}${name}`;
+export const isDatasetNode = (id: string) => id.startsWith(DATASET);
+export const datasetName = (id: string) => (isDatasetNode(id) ? id.slice(DATASET.length) : id);
 
 export type ConnectionSettings = Record<string, string | number | boolean>;
-
-export interface SinkSpec {
-  Type?: string;
-  Ontology?: string;
-  Topic?: string;
-  ConnectionSettings?: ConnectionSettings;
-  [key: string]: unknown;
-}
 
 export interface TransformerSpec {
   Repo?: string;
@@ -20,16 +17,17 @@ export interface TransformerSpec {
   Ref?: string;
   IN?: string;
   OUT?: string;
+  ConsumerGroup?: string;
   [key: string]: unknown;
 }
 
-export type NodeKind = "source" | "output" | "transformer";
+export type NodeKind = "transformer" | "dataset";
 
 export interface GraphNode {
   id: string;
   kind: NodeKind;
-  sink?: SinkSpec;
   transformer?: TransformerSpec;
+  dataset?: string; // the topic's name, for a dataset node
 }
 
 export interface GraphEdge {
@@ -37,28 +35,36 @@ export interface GraphEdge {
   target: string;
 }
 
-export interface InternalDatasets {
-  Partitions?: number;
-  ReplicationFactor?: number;
-  RetentionMs?: number;
-  ConnectionSettings?: ConnectionSettings;
-  [key: string]: unknown;
-}
-
-export interface Defaults {
-  Registry?: string;
-  InternalDatasets?: InternalDatasets;
-  [key: string]: unknown;
-}
-
 export interface Graph {
   name: string;
-  defaults: Defaults;
-  schemas: Record<string, string>;
+  catalog: string; // the manifest's Catalog: path, relative to the manifest
+  consumerGroup: string;
   nodes: GraphNode[];
   edges: GraphEdge[];
   extra?: Record<string, unknown>;
   warnings?: string[];
+}
+
+export interface DatasetSpec {
+  Cluster?: string;
+  Schema?: string;
+  Description?: string;
+  [key: string]: unknown;
+}
+
+export interface SchemaInfo {
+  file: string;
+  format: string | null;
+  fields: Record<string, string>;
+}
+
+/** The shared catalog (catalog.yaml): clusters, schemas, and registered topics (datasets). */
+export interface Catalog {
+  clusters: Record<string, ConnectionSettings>;
+  schemas: Record<string, string>;
+  datasets: Record<string, DatasetSpec>;
+  extra?: Record<string, unknown>;
+  schemaInfo?: Record<string, SchemaInfo>;
 }
 
 export interface Layout {
@@ -78,9 +84,9 @@ export interface ValidationResult {
   ok: boolean;
   errors: Issue[];
   manifest: string;
-  topics: Record<string, { topic: string; internal: boolean }>;
   summary: string | null;
-  internalDatasets?: string[];
+  sources?: string[];
+  sinks?: string[];
 }
 
 export interface Version {
@@ -113,16 +119,6 @@ export interface TransformerInfo {
   versions: Version[];
 }
 
-export interface MergeRequest {
-  iid: number;
-  title: string;
-  state: string;
-  webUrl: string;
-  sourceBranch: string;
-  createdAt: string;
-  pipeline: { status: string | null; webUrl: string | null } | null;
-}
-
 export interface WatcherStatus {
   mode: string;
   pollInterval: number;
@@ -130,6 +126,8 @@ export interface WatcherStatus {
   lastWebhook: number | null;
   errors: Record<string, string>;
   projects: string[];
+  scope?: "fixed" | "membership";
+  withTransformers?: string[];
   ready: boolean;
 }
 
@@ -139,31 +137,58 @@ export interface Health {
   tokenConfigured: boolean;
   webhookConfigured: boolean;
   foundryCommit: string | null;
-  deploysProject: string;
+  workspace: string;
+  deployTarget: string | null;
   transformerProjects: string[];
   watcher: WatcherStatus;
 }
 
+/** One recorded deploy (deploy.py's history), or the pipeline's current state. */
+export interface DeployRecord {
+  id: string;
+  action: "deploy" | "rollback" | "stop";
+  at: string;
+  by: string;
+  from?: string;
+  digest?: string;
+  project?: string;
+  runner?: string;
+  graph?: string[];
+  transformers?: Record<string, { commit: string; ref: string; image: string }>;
+}
+
 export interface PipelineListing {
   name: string;
-  deployed: boolean;
-  draft: boolean;
-  error?: string;
+  deploy: DeployRecord | null;
+}
+
+export interface DeployService {
+  service: string;
+  state: string;
+  status: string;
+  image: string;
+}
+
+export interface DeployHistory {
+  current: DeployRecord | null;
+  history: DeployRecord[];
+  runner: string;
+  project: string;
+  services: DeployService[];
+  servicesError: string | null;
 }
 
 export interface LoadedPipeline {
-  source: "draft" | "deployed";
   graph: Graph;
   layout: Layout | null;
   manifest: string;
+  path: string;
 }
 
-export interface DeployResult {
-  status: "up_to_date" | "opened";
-  mrUrl: string | null;
-  branch?: string | null;
-  log: string;
-}
+export type DeployEvent =
+  | { type: "log"; line: string }
+  | { type: "result"; status: "deployed" | "unchanged" | "rolled-back" | "stopped"; id?: string; from?: string; project?: string }
+  | { type: "error"; status: number; message: string; errors: Issue[] };
 
 export interface FeedMessage {
   partition: number;
@@ -182,12 +207,10 @@ export interface FeedState {
   state: "idle" | "connecting" | "live" | "error";
   topic?: string;
   schema?: string | null;
-  internal?: boolean;
+  cluster?: string;
   message?: string;
   demo?: boolean;
   partitions?: number;
   messages: FeedMessage[]; // newest first
   count: number;
 }
-
-export type SinkId = "InputSink" | "OutputSink";

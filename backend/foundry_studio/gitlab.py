@@ -20,6 +20,7 @@ class GitLabError(Exception):
 
 
 class GitLab(Protocol):
+    async def list_projects(self) -> list[dict]: ...
     async def get_project(self, project: str) -> dict: ...
     async def get_commit(self, project: str, ref: str) -> dict | None: ...
     async def last_commit(self, project: str, ref: str, path: str) -> dict | None: ...
@@ -27,8 +28,6 @@ class GitLab(Protocol):
     async def get_file(self, project: str, path: str, ref: str) -> bytes | None: ...
     async def list_tags(self, project: str, search: str | None = None) -> list[dict]: ...
     async def list_events(self, project: str) -> list[dict]: ...
-    async def list_merge_requests(self, project: str, limit: int = 5) -> list[dict]: ...
-    async def get_merge_request(self, project: str, iid: int) -> dict: ...
     async def aclose(self) -> None: ...
 
 
@@ -63,6 +62,11 @@ class HttpGitLab:
             if not nxt or len(out) >= limit:
                 return out
             params["page"] = int(nxt)
+
+    async def list_projects(self) -> list[dict]:
+        """Every non-archived project the token's user is a member of (directly or through a group)."""
+        return await self._paged("/projects", {"membership": "true", "archived": "false", "simple": "true",
+                                               "order_by": "last_activity_at"}, limit=5000)
 
     async def get_project(self, project: str) -> dict:
         return (await self._get(f"/projects/{_pid(project)}")).json()
@@ -105,13 +109,3 @@ class HttpGitLab:
     async def list_events(self, project: str) -> list[dict]:
         r = await self._get(f"/projects/{_pid(project)}/events", {"per_page": 50})
         return r.json()
-
-    async def list_merge_requests(self, project: str, limit: int = 5) -> list[dict]:
-        r = await self._get(
-            f"/projects/{_pid(project)}/merge_requests",
-            {"order_by": "created_at", "sort": "desc", "per_page": limit, "state": "all"},
-        )
-        return r.json()
-
-    async def get_merge_request(self, project: str, iid: int) -> dict:
-        return (await self._get(f"/projects/{_pid(project)}/merge_requests/{iid}")).json()

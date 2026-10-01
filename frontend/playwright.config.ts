@@ -2,8 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The e2e suite runs against the offline demo: local git repos standing in for
-// skywalker and PipelineDeploys (see backend/foundry_studio/demo.py). No GitLab token needed.
+// The e2e suite runs against the offline demo: a local git repo standing in for
+// skywalker, a workspace, and a Runner: none deploy target (see backend/foundry_studio/demo.py). No token needed.
 const BACKEND_PORT = 8100;
 const FRONTEND_PORT = 5199;
 const scratch = process.env.STUDIO_E2E_SCRATCH ?? join(tmpdir(), `foundry-studio-e2e-${process.pid}`);

@@ -8,7 +8,7 @@ setup:            ## install everything (foundry submodule, Python and Node deps
 dev:              ## backend + frontend against GitLab (needs GITLAB_TOKEN)
 	./scripts/dev.sh
 
-demo:             ## same, against local stand-ins for skywalker and PipelineDeploys
+demo:             ## same, against a local stand-in for skywalker (no token, no Docker)
 	STUDIO_FAKE_GITLAB=demo ./scripts/dev.sh
 
 demo-reset:       ## recreate the demo repos

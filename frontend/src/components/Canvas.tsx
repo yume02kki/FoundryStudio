@@ -14,20 +14,21 @@ import { api } from "../api";
 import { checkConnection } from "../lib/rules";
 import { ALL_COLORS } from "../lib/schemaColor";
 import { useStudio, type PEdge, type PNode } from "../store";
-import { PipelineNode } from "./PipelineNode";
+import { DatasetNode, TransformerNode } from "./PipelineNode";
 import { ArrowMarkers, ConnectionLine, DragTooltip, TopicEdge } from "./TopicEdge";
 
 export const DRAG_MIME = "application/x-foundry-transformer";
+export const DATASET_MIME = "application/x-foundry-dataset";
 
-const nodeTypes = { pipeline: PipelineNode };
+const nodeTypes = { transformer: TransformerNode, dataset: DatasetNode };
 const edgeTypes = { topic: TopicEdge };
 
 /** Ask deploy.py (through the backend) whether source -> target is acceptable; refuse with its message. */
 async function confirmEdge(source: string, target: string, localReason?: string): Promise<boolean> {
-  const { graph, toast } = useStudio.getState();
+  const { graph, toast, catalog, catalogDirty } = useStudio.getState();
   let message = localReason ?? null;
   try {
-    const res = await api.checkEdge(graph(), source, target);
+    const res = await api.checkEdge(graph(), catalogDirty ? catalog : null, source, target);
     if (res.ok && !localReason) return true;
     message = res.message ?? localReason ?? null;
   } catch {
@@ -47,7 +48,11 @@ export function Canvas() {
   const flow = useReactFlow<PNode, PEdge>();
 
   useEffect(() => {
-    const t = setTimeout(() => flow.fitView({ padding: 0.25, duration: 200 }), 60);
+    // An empty (new) pipeline has nothing to fit: show it at 100% rather than zoomed all the way in.
+    const t = setTimeout(
+      () => (flow.getNodes().length ? flow.fitView({ padding: 0.25, duration: 200, maxZoom: 1.2 }) : flow.setViewport({ x: 0, y: 0, zoom: 1 })),
+      60,
+    );
     return () => clearTimeout(t);
   }, [loadId, flow]);
 
@@ -58,7 +63,10 @@ export function Canvas() {
   }, [focus, flow]);
 
   const isValidConnection: IsValidConnection<PEdge> = useCallback(
-    (c) => checkConnection(useStudio.getState().graph(), c.source, c.target).ok,
+    (c) => {
+      const s = useStudio.getState();
+      return checkConnection(s.graph(), s.catalog, c.source, c.target).ok;
+    },
     [],
   );
 
@@ -72,12 +80,13 @@ export function Canvas() {
     if (state.toNode.id === state.fromNode.id && !state.toHandle) return;
     const [source, target] =
       state.fromHandle.type === "source" ? [state.fromNode.id, state.toNode.id] : [state.toNode.id, state.fromNode.id];
-    const check = checkConnection(useStudio.getState().graph(), source, target);
-    if (!check.ok) void confirmEdge(source, target, check.reason);
+    const s = useStudio.getState();
+    const check = checkConnection(s.graph(), s.catalog, source, target);
+    if (!check.ok && check.kind !== "duplicate") void confirmEdge(source, target, check.reason);
   }, []);
 
   const onDragOver = useCallback((e: DragEvent) => {
-    if (e.dataTransfer.types.includes(DRAG_MIME)) {
+    if (e.dataTransfer.types.includes(DRAG_MIME) || e.dataTransfer.types.includes(DATASET_MIME)) {
       e.preventDefault();
       e.dataTransfer.dropEffect = "copy";
     }
@@ -85,14 +94,20 @@ export function Canvas() {
 
   const onDrop = useCallback(
     (e: DragEvent) => {
+      const s = useStudio.getState();
+      const p = flow.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      const dataset = e.dataTransfer.getData(DATASET_MIME);
+      if (dataset && s.meta) {
+        e.preventDefault();
+        s.addDataset(dataset, { x: p.x - 80, y: p.y - 30 });
+        return;
+      }
       const raw = e.dataTransfer.getData(DRAG_MIME);
       if (!raw) return;
       e.preventDefault();
       const { id, ref } = JSON.parse(raw) as { id: string; ref: string };
-      const s = useStudio.getState();
       const info = s.transformers[id];
       if (!info || !s.meta) return;
-      const p = flow.screenToFlowPosition({ x: e.clientX, y: e.clientY });
       s.addTransformer(info, ref, { x: p.x - 90, y: p.y - 40 });
     },
     [flow],

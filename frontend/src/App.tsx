@@ -7,7 +7,6 @@ import { DeployDialog, Toasts, VersionPicker } from "./components/Dialogs";
 import { Inspector } from "./components/Inspector";
 import { useLiveFeeds } from "./components/LiveData";
 import { TopBar } from "./components/TopBar";
-import { SINK, SOURCE } from "./types";
 import { useStudio } from "./store";
 
 function setUrl(params: Record<string, string> | null) {
@@ -25,7 +24,8 @@ function useValidation() {
     const t = setTimeout(async () => {
       useStudio.setState({ validating: true });
       try {
-        const validation = await api.validate(useStudio.getState().graph(), ctrl.signal);
+        const s = useStudio.getState();
+        const validation = await api.validate(s.graph(), s.catalogDirty ? s.catalog : null, ctrl.signal);
         if (!ctrl.signal.aborted) useStudio.setState({ validation });
       } catch (e) {
         if (!ctrl.signal.aborted) console.warn("validate failed", e);
@@ -43,9 +43,9 @@ function useValidation() {
 function useLiveUpdates() {
   useEffect(() => {
     const resync = async () => {
-      const [t, mr] = await Promise.all([api.transformers(), api.latestMr()]);
+      const t = await api.transformers();
       useStudio.getState().setTransformers(t.transformers);
-      useStudio.setState({ watcher: t.status, mr: mr.mr, live: true });
+      useStudio.setState({ watcher: t.status, live: true });
     };
     return subscribe(
       (e) => {
@@ -62,12 +62,6 @@ function useLiveUpdates() {
           case "transformer.removed":
             s.removeTransformer(e.id);
             s.toast({ kind: "warning", text: `Transformer removed from its repo: ${e.name}` });
-            break;
-          case "mr.updated":
-            useStudio.setState({ mr: e.mr });
-            break;
-          case "pipelines.changed":
-            api.pipelines().then((p) => useStudio.setState({ pipelines: p.pipelines }));
             break;
           case "watcher.status":
             useStudio.setState({ watcher: e.status });
@@ -90,16 +84,16 @@ export default function App() {
   const openNew = useCallback(async () => {
     if (!confirmDiscard()) return;
     const template = await api.template();
-    useStudio.getState().load(template, { version: 1, positions: { [SOURCE]: { x: 0, y: 0 }, [SINK]: { x: 1000, y: 0 } } }, { kind: "new" });
+    useStudio.getState().load(template, { version: 1, positions: {} }, { kind: "new" });
     setUrl({ new: "1" });
   }, []);
 
-  const open = useCallback(async (name: string, source?: "draft" | "deployed") => {
+  const open = useCallback(async (name: string) => {
     if (!confirmDiscard()) return;
     try {
-      const loaded = await api.load(name, source);
-      useStudio.getState().load(loaded.graph, loaded.layout, { kind: loaded.source, name });
-      setUrl({ pipeline: name, source: loaded.source });
+      const loaded = await api.load(name);
+      useStudio.getState().load(loaded.graph, loaded.layout, { kind: "saved", name });
+      setUrl({ pipeline: name });
       for (const w of loaded.graph.warnings ?? []) useStudio.getState().toast({ kind: "warning", text: w }, 10000);
     } catch (e) {
       useStudio.getState().toast({ kind: "error", text: `Couldn't open ${name}: ${(e as Error).message}` }, 10000);
@@ -111,17 +105,14 @@ export default function App() {
     if (started.current) return;
     started.current = true;
     (async () => {
-      const [health, pipelines] = await Promise.all([api.health(), api.pipelines()]);
-      useStudio.setState({ health, watcher: health.watcher, pipelines: pipelines.pipelines });
+      const [health, pipelines, catalog] = await Promise.all([api.health(), api.pipelines(), api.catalog()]);
+      useStudio.setState({ health, watcher: health.watcher, pipelines: pipelines.pipelines, catalog, catalogDirty: false });
       const params = new URLSearchParams(window.location.search);
       const name = params.get("pipeline");
-      if (name) await open(name, (params.get("source") as "draft" | "deployed") ?? undefined);
+      if (name) await open(name);
       else if (params.has("new")) await openNew();
-      else {
-        const first = pipelines.pipelines.find((p) => p.deployed) ?? pipelines.pipelines[0];
-        if (first) await open(first.name, first.deployed ? "deployed" : "draft");
-        else await openNew();
-      }
+      else if (pipelines.pipelines[0]) await open(pipelines.pipelines[0].name);
+      else await openNew();
     })().catch((e) => useStudio.getState().toast({ kind: "error", text: `Backend unreachable: ${e.message}` }, 0));
   }, [open, openNew]);
 
