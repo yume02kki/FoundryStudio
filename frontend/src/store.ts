@@ -89,6 +89,8 @@ interface State {
   layout: () => Layout;
   socketOrder: Record<string, string[]>;
   orderSockets: (id: string, order: string[]) => void;
+  /** Re-place every node with the auto layout (visual only, like dragging them). */
+  arrange: () => void;
   load: (graph: Graph, layout: Layout | null, origin: Origin) => void;
   onNodesChange: (changes: NodeChange<PNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<PEdge>[]) => void;
@@ -168,6 +170,14 @@ export const useStudio = create<State>()((set, get) => ({
   socketOrder: {},
   // Purely visual, like moving a node: saved in the layout, not the manifest.
   orderSockets: (id, order) => set((s) => ({ socketOrder: { ...s.socketOrder, [id]: order }, dirty: true })),
+  arrange: () =>
+    set((s) => {
+      const sizes = Object.fromEntries(
+        s.nodes.filter((n) => n.measured?.width && n.measured?.height).map((n) => [n.id, { width: n.measured!.width!, height: n.measured!.height! }]),
+      );
+      const pos = autoLayout(s.nodes.map((n) => n.data.spec), s.edges, sizes);
+      return { nodes: s.nodes.map((n) => (pos[n.id] ? { ...n, position: pos[n.id] } : n)), dirty: true };
+    }),
 
   load: (graph, layout, origin) => {
     const auto = autoLayout(graph.nodes, graph.edges);

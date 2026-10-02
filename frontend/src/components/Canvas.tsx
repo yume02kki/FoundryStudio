@@ -1,6 +1,7 @@
 import {
   Background,
   BackgroundVariant,
+  ControlButton,
   Controls,
   MiniMap,
   ReactFlow,
@@ -168,7 +169,18 @@ export function Canvas() {
       >
         <Background id="minor" variant={BackgroundVariant.Lines} gap={20} color="#333" lineWidth={1} />
         <Background id="major" variant={BackgroundVariant.Lines} gap={200} color="#444" lineWidth={1} />
-        <Controls showInteractive={false} />
+        <Controls showInteractive={false}>
+          <ControlButton
+            title="Arrange nodes"
+            data-testid="arrange"
+            onClick={() => {
+              useStudio.getState().arrange();
+              setTimeout(() => flow.fitView({ padding: 0.25, duration: 300, maxZoom: 1.2 }), 30);
+            }}
+          >
+            <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="5" height="4" rx="1" /><rect x="10" y="2" width="5" height="4" rx="1" /><rect x="10" y="10" width="5" height="4" rx="1" /><path d="M6 4h4M8 4v8h2" stroke="currentColor" strokeWidth="1.3" fill="none" /></svg>
+          </ControlButton>
+        </Controls>
         <MiniMap pannable zoomable maskColor="rgba(20,20,20,0.6)" nodeColor="#666" style={{ width: 150, height: 90 }} />
       </ReactFlow>
       <DragTooltip />

@@ -170,6 +170,7 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
     <div
       className={`pnode pnode-dataset${sockets.length ? " pnode-dataset-rows" : ""}${selected ? " selected" : ""}${errors.length ? " has-error" : ""}${focus?.nodes.includes(id) ? " focused" : ""}${spec ? "" : " missing"}`}
       data-testid={`node-${id}`}
+      style={{ borderLeftColor: color }}
       title={errors.map((e) => e.message).join("\n") || (spec?.Topic ? `Topic ${spec.Topic}` : undefined)}
     >
       {!sockets.length && <Port nodeId={id} port="in" schema={schema} label={false} />}
