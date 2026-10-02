@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GraphNode, ProcessorInfo } from "../types";
 import type { Processors } from "./rules";
-import { inputSockets, outputSockets, wires } from "./sockets";
+import { inputSockets, moveSocket, ordered, outputSockets, wires } from "./sockets";
 
 const info = (name: string, input: string, output: string): ProcessorInfo => {
   const v = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "processor.yaml", warnings: [], web_url: "" };
@@ -31,5 +31,18 @@ describe("sockets", () => {
       { sourceHandle: "out", targetHandle: "in:DecodeEnrichment", schema: "DecodeEnrichment" },
     ]);
     expect(wires(d("Converted", "Packets"), p("decode"), processors)).toEqual([{ sourceHandle: "out", targetHandle: "in", schema: "Packets" }]);
+  });
+});
+
+describe("socket order", () => {
+  it("follows the saved order, unmentioned schemas last", () => {
+    expect(ordered(["A", "B", "C"], ["C", "A"])).toEqual(["C", "A", "B"]);
+    expect(ordered(["A", "B"], undefined)).toEqual(["A", "B"]);
+  });
+
+  it("a dragged socket takes the place of the one it's dropped on", () => {
+    expect(moveSocket(["A", "B", "C"], "A", "C")).toEqual(["B", "C", "A"]);
+    expect(moveSocket(["A", "B", "C"], "C", "A")).toEqual(["C", "A", "B"]);
+    expect(moveSocket(["A", "B"], "X", "A")).toEqual(["A", "B"]);
   });
 });

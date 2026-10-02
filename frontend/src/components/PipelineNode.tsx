@@ -1,7 +1,7 @@
 import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
-import { memo } from "react";
+import { memo, type DragEvent, type HTMLAttributes } from "react";
 import { checkConnection, datasetSchema, emits, expects } from "../lib/rules";
-import { inputSockets, outputSockets, socketId } from "../lib/sockets";
+import { inputSockets, moveSocket, ordered, outputSockets, socketId } from "../lib/sockets";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, updateFor, versionFor } from "../lib/versions";
 import { issuesFor, useStudio, type PNode } from "../store";
@@ -22,8 +22,39 @@ function usePortState(nodeId: string, port: "in" | "out"): PortState {
   return checkConnection(s.graph(), s.processors, a, b).ok ? "compatible" : "incompatible";
 }
 
-function Port({ nodeId, port, schema, label = true, handle = port, testId = `port-${nodeId}-${port}`, text, title, connectable = true }: {
-  nodeId: string; port: "in" | "out"; schema?: string; label?: boolean; handle?: string; testId?: string; text?: string; title?: string; connectable?: boolean;
+const SOCKET_MIME = "application/x-foundry-socket";
+
+/** Props making a socket's label draggable onto its siblings to rearrange them (a visual choice, kept in the layout). */
+function reorderable(nodeId: string, schema: string, schemas: string[]): HTMLAttributes<HTMLElement> {
+  const ours = (e: DragEvent) => e.dataTransfer.types.includes(SOCKET_MIME);
+  return {
+    draggable: true,
+    className: "nodrag nopan socket-grab",
+    title: "Drag to reorder",
+    onDragStart: (e) => {
+      e.stopPropagation();
+      e.dataTransfer.setData(SOCKET_MIME, JSON.stringify({ nodeId, schema }));
+      e.dataTransfer.effectAllowed = "move";
+    },
+    onDragOver: (e) => {
+      if (!ours(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+    },
+    onDrop: (e) => {
+      if (!ours(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dragged = JSON.parse(e.dataTransfer.getData(SOCKET_MIME)) as { nodeId: string; schema: string };
+      if (dragged.nodeId === nodeId && dragged.schema !== schema)
+        useStudio.getState().orderSockets(nodeId, moveSocket(schemas, dragged.schema, schema));
+    },
+  };
+}
+
+function Port({ nodeId, port, schema, label = true, handle = port, testId = `port-${nodeId}-${port}`, text, title, connectable = true, labelProps }: {
+  nodeId: string; port: "in" | "out"; schema?: string; label?: boolean; handle?: string; testId?: string; text?: string; title?: string;
+  connectable?: boolean; labelProps?: HTMLAttributes<HTMLElement>;
 }) {
   const state = usePortState(nodeId, port);
   const color = schemaColor(schema);
@@ -38,7 +69,7 @@ function Port({ nodeId, port, schema, label = true, handle = port, testId = `por
         style={{ background: color, borderColor: color }}
       />
       {label && (
-        <span className="port-label" style={{ color }}>
+        <span {...labelProps} className={`port-label ${labelProps?.className ?? ""}`} style={{ color }}>
           {port === "in" ? "▸ " : ""}
           {text ?? schema ?? "untyped"}
           {port === "out" ? " ▸" : ""}
@@ -60,6 +91,8 @@ function ProcessorNodeView({ id, data, selected }: NodeProps<PNode>) {
   const version = versionFor(info, spec.processor?.Ref);
   const update = updateFor(info, spec.processor?.Ref);
   const subtitle = spec.processor?.Ref ? version?.label ?? spec.processor.Ref : "latest (default branch)";
+  const socketOrder = useStudio((s) => s.socketOrder[id]);
+  const ins = ordered(inputSockets(spec, processors), socketOrder);
 
   return (
     <div
@@ -97,10 +130,11 @@ function ProcessorNodeView({ id, data, selected }: NodeProps<PNode>) {
       <div className="pnode-sub">{subtitle}</div>
       <NodeActivity node={id} />
       <div className="pnode-ports">
-        {inputSockets(spec, processors).length ? (
+        {ins.length ? (
           <div className="port-ins">
-            {inputSockets(spec, processors).map((s) => (
-              <Port key={s} nodeId={id} port="in" handle={socketId("in", s)} testId={`port-${id}-in-${s}`} schema={s} />
+            {ins.map((s) => (
+              <Port key={s} nodeId={id} port="in" handle={socketId("in", s)} testId={`port-${id}-in-${s}`} schema={s}
+                labelProps={reorderable(id, s, ins)} />
             ))}
           </div>
         ) : (
@@ -122,7 +156,8 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
   const spec = data.spec.datasetSpec;
   const schema = datasetSchema(data.spec);
   const color = schemaColor(schema);
-  const sockets = outputSockets(data.spec);
+  const socketOrder = useStudio((s) => s.socketOrder[id]);
+  const sockets = ordered(outputSockets(data.spec), socketOrder);
 
   return (
     <div
@@ -143,9 +178,12 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
         <div className="dataset-topic mono muted" data-testid={`topic-${name}`}>
           {spec?.Topic ?? "no topic"}
         </div>
-        <div className="dataset-schema" style={{ color }} data-testid={`schema-${name}`}>
-          {schema ?? "?"}
-        </div>
+        {!sockets.length && (
+          // With several schemas, the rows below name them.
+          <div className="dataset-schema" style={{ color }} data-testid={`schema-${name}`}>
+            {schema ?? "?"}
+          </div>
+        )}
         <NodeActivity node={id} />
         {errors.length > 0 && <div className="pnode-errors">{errors.length} issue{errors.length > 1 ? "s" : ""}</div>}
       </div>
@@ -156,7 +194,7 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
           {sockets.map((s) => (
             <div className="dataset-row" key={s}>
               <Port nodeId={id} port="in" handle={socketId("in", s)} testId={`port-${id}-in-${s}`} schema={s} label={false} />
-              <span className="dataset-row-label" style={{ color: schemaColor(s) }}>{s}</span>
+              <span {...reorderable(id, s, sockets)} className={`dataset-row-label ${reorderable(id, s, sockets).className}`} style={{ color: schemaColor(s) }}>{s}</span>
               <Port nodeId={id} port="out" handle={socketId("out", s)} testId={`port-${id}-out-${s}`} schema={s} label={false} />
             </div>
           ))}

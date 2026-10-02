@@ -36,3 +36,19 @@ export function wires(source: GraphNode | undefined, target: GraphNode | undefin
   const schema = schemaList(emits(source, processors))?.[0];
   return [{ sourceHandle: "out", targetHandle: into(schema), schema }];
 }
+
+/** Schemas in the node's saved order (rearranged by hand); ones the order doesn't mention keep their place at the end. */
+export function ordered(schemas: string[], order: string[] | undefined): string[] {
+  if (!order?.length) return schemas;
+  const at = (s: string) => (order.includes(s) ? order.indexOf(s) : order.length + schemas.indexOf(s));
+  return [...schemas].sort((a, b) => at(a) - at(b));
+}
+
+/** The order after dragging `moved` onto `onto`: it takes that place. */
+export function moveSocket(schemas: string[], moved: string, onto: string): string[] {
+  const to = schemas.indexOf(onto);
+  if (to < 0 || !schemas.includes(moved)) return schemas;
+  const rest = schemas.filter((s) => s !== moved);
+  rest.splice(to, 0, moved);
+  return rest;
+}

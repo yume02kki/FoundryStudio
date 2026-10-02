@@ -87,6 +87,8 @@ interface State {
 
   graph: () => Graph;
   layout: () => Layout;
+  socketOrder: Record<string, string[]>;
+  orderSockets: (id: string, order: string[]) => void;
   load: (graph: Graph, layout: Layout | null, origin: Origin) => void;
   onNodesChange: (changes: NodeChange<PNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<PEdge>[]) => void;
@@ -152,12 +154,20 @@ export const useStudio = create<State>()((set, get) => ({
     };
   },
 
-  layout: () => ({
-    version: 1,
-    positions: Object.fromEntries(
-      get().nodes.map((n) => [n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) }]),
-    ),
-  }),
+  layout: () => {
+    const { nodes, socketOrder } = get();
+    const ids = new Set(nodes.map((n) => n.id));
+    const sockets = Object.fromEntries(Object.entries(socketOrder).filter(([id, order]) => ids.has(id) && order.length));
+    return {
+      version: 1,
+      positions: Object.fromEntries(nodes.map((n) => [n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) }])),
+      ...(Object.keys(sockets).length ? { sockets } : {}),
+    };
+  },
+
+  socketOrder: {},
+  // Purely visual, like moving a node: saved in the layout, not the manifest.
+  orderSockets: (id, order) => set((s) => ({ socketOrder: { ...s.socketOrder, [id]: order }, dirty: true })),
 
   load: (graph, layout, origin) => {
     const auto = autoLayout(graph.nodes, graph.edges);
@@ -167,6 +177,7 @@ export const useStudio = create<State>()((set, get) => ({
       meta: { name: graph.name, configs: graph.configs ?? {}, extra: graph.extra ?? {} },
       nodes,
       edges: graph.edges.map((e) => toPEdge(e.source, e.target)),
+      socketOrder: layout?.sockets ?? {},
       origin,
       loadId: s.loadId + 1,
       revision: s.revision + 1,
@@ -260,8 +271,10 @@ export const useStudio = create<State>()((set, get) => ({
     const ren = (id: string) => (id === from ? to : id);
     const renamed = (spec: GraphNode): GraphNode => ({ ...spec, id: to, ...(dataset ? { dataset: datasetName(to) } : {}) });
     const nodes = s.nodes.map((n) => (n.id === from ? { ...n, id: to, data: { spec: renamed(n.data.spec) } } : n));
+    const { [from]: order, ...socketOrder } = s.socketOrder;
     set({
       nodes,
+      socketOrder: order ? { ...socketOrder, [to]: order } : socketOrder,
       edges: s.edges.map((e) =>
         e.source === from || e.target === from ? { ...toPEdge(ren(e.source), ren(e.target)), selected: e.selected } : e,
       ),

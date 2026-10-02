@@ -71,6 +71,7 @@ export interface Catalog {
 export interface Layout {
   version: 1;
   positions: Record<string, { x: number; y: number }>;
+  sockets?: Record<string, string[]>; // a node's socket order, by schema, where it was rearranged
 }
 
 export interface Issue {
