@@ -7,6 +7,8 @@ local git repositories, for tests and the offline demo.
 
 from __future__ import annotations
 
+import re
+
 from typing import Protocol
 from urllib.parse import quote
 
@@ -31,6 +33,9 @@ class GitLab(Protocol):
     async def aclose(self) -> None: ...
 
 
+_DELETION_SCHEDULED = re.compile(r"-deletion_scheduled-\d+$")
+
+
 def _pid(project: str) -> str:
     return quote(project, safe="")
 
@@ -47,6 +52,9 @@ class HttpGitLab:
         r = await self._client.get(url, params=params)
         if allow_404 and r.status_code == 404:
             return None
+        if 300 <= r.status_code < 400:
+            # A renamed project (e.g. one scheduled for deletion) answers its old path with a redirect.
+            raise GitLabError(r.status_code, f"moved to {r.headers.get('location', '?')} (renamed, or scheduled for deletion?)")
         if r.status_code >= 400:
             # Never echo request headers; the body is GitLab's own error message.
             raise GitLabError(r.status_code, r.text[:200])
@@ -64,9 +72,11 @@ class HttpGitLab:
             params["page"] = int(nxt)
 
     async def list_projects(self) -> list[dict]:
-        """Every non-archived project the token's user is a member of (directly or through a group)."""
-        return await self._paged("/projects", {"membership": "true", "archived": "false", "simple": "true",
-                                               "order_by": "last_activity_at"}, limit=5000)
+        """Every non-archived project the token's user is a member of (directly or through a group),
+        minus those scheduled for deletion (GitLab keeps them, renamed, for a grace period)."""
+        projects = await self._paged("/projects", {"membership": "true", "archived": "false", "simple": "true",
+                                                   "order_by": "last_activity_at"}, limit=5000)
+        return [p for p in projects if not _DELETION_SCHEDULED.search(p.get("path_with_namespace", ""))]
 
     async def get_project(self, project: str) -> dict:
         return (await self._get(f"/projects/{_pid(project)}")).json()
