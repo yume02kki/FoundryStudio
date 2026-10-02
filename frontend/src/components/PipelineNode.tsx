@@ -1,5 +1,5 @@
-import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
-import { memo, type DragEvent, type HTMLAttributes } from "react";
+import { Handle, Position, useConnection, useUpdateNodeInternals, type NodeProps } from "@xyflow/react";
+import { memo, useEffect, type DragEvent, type HTMLAttributes } from "react";
 import { checkConnection, datasetSchema, emits, expects } from "../lib/rules";
 import { inputSockets, moveSocket, ordered, outputSockets, socketId } from "../lib/sockets";
 import { schemaColor } from "../lib/schemaColor";
@@ -25,6 +25,13 @@ function usePortState(nodeId: string, port: "in" | "out"): PortState {
 const SOCKET_MIME = "application/x-foundry-socket";
 
 /** Props making a socket's label draggable onto its siblings to rearrange them (a visual choice, kept in the layout). */
+/** React Flow caches handle positions; re-measure when sockets move within the node. */
+function useRemeasure(nodeId: string, sockets: string[]) {
+  const update = useUpdateNodeInternals();
+  const key = sockets.join("|");
+  useEffect(() => update(nodeId), [nodeId, key, update]);
+}
+
 function reorderable(nodeId: string, schema: string, schemas: string[]): HTMLAttributes<HTMLElement> {
   const ours = (e: DragEvent) => e.dataTransfer.types.includes(SOCKET_MIME);
   return {
@@ -91,6 +98,7 @@ function ProcessorNodeView({ id, data, selected }: NodeProps<PNode>) {
   const subtitle = spec.processor?.Ref ? version?.label ?? spec.processor.Ref : "latest (default branch)";
   const socketOrder = useStudio((s) => s.socketOrder[id]);
   const ins = ordered(inputSockets(spec, processors), socketOrder);
+  useRemeasure(id, ins);
 
   return (
     <div
@@ -156,6 +164,7 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
   const color = schemaColor(schema);
   const socketOrder = useStudio((s) => s.socketOrder[id]);
   const sockets = ordered(outputSockets(data.spec), socketOrder);
+  useRemeasure(id, sockets);
 
   return (
     <div
