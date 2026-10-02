@@ -1,6 +1,6 @@
 """What a manifest refers to but doesn't contain, read through the GitLab API:
 
-* connection profiles, `<kind>/<name>.yaml` in the configs repo the manifest names
+* connection profiles, `<kind>/<name>.json` in the configs repo the manifest names
   (`Configs: {Repo, Ref}`), e.g. kafka/prod;
 * schemas, `schemas/*.yaml` in the configs repo, named as foundry-common's generator names the
   types (xml_packets.yaml -> XmlPackets).
@@ -12,6 +12,7 @@ and a failed refresh keeps serving the last good copy. Studio never writes to ei
 from __future__ import annotations
 
 import asyncio
+import json
 import posixpath
 import time
 from pathlib import Path
@@ -73,23 +74,23 @@ class Sources:
         return commit["id"], {p: b for p, b in zip(paths, blobs) if b is not None}
 
     async def configs(self, repo: str | None = None, ref: str | None = None) -> dict:
-        """{repo, ref, commit, files: {kind/name.yaml: bytes}, profiles: {kind/name: ConnectionSettings}}."""
+        """{repo, ref, commit, files: {kind/name.json: bytes}, profiles: {kind/name: ConnectionSettings}}."""
         repo, ref = repo or self.configs_repo, ref or self.m.DEFAULT_REF
 
         async def load():
             def wanted(path):
                 kind, _, name = path.partition("/")
-                return kind in self.m.KINDS and "/" not in name and name.endswith(".yaml")
+                return kind in self.m.KINDS and "/" not in name and name.endswith(".json")
 
             commit, files = await self._files(self.project_of(repo), ref, wanted)
             profiles = {}
             for path, data in sorted(files.items()):
                 try:
-                    spec = yaml.safe_load(data) or {}
-                except yaml.YAMLError:
+                    spec = json.loads(data)
+                except ValueError:
                     spec = {}
                 settings = spec.get("ConnectionSettings") if isinstance(spec, dict) else None
-                profiles[path.removesuffix(".yaml")] = dict(settings) if isinstance(settings, dict) else {}
+                profiles[path.removesuffix(".json")] = dict(settings) if isinstance(settings, dict) else {}
             return {"repo": repo, "ref": ref, "commit": commit, "files": files, "profiles": profiles}
 
         return await self._cached(("configs", repo, ref), load)

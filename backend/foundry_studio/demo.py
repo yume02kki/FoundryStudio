@@ -30,10 +30,10 @@ ENRICHERS = "foundry-platform/enrichers"
 FIXED_DATE = "2026-09-01T12:00:00+00:00"
 
 PROFILES = {
-    "kafka/prod.yaml": ("# Production cluster.\nConnectionSettings:\n  Brokers: kafka-internal:9092\n"
-                        "  SecurityProtocol: SASL_SSL\n  SaslMechanism: SCRAM-SHA-512\n  SecretRef: kafka-internal-creds\n"),
-    "kafka/load.yaml": ("# Load-testing cluster.\nConnectionSettings:\n  Brokers: kafka-load:9092\n"
-                        "  SecurityProtocol: SASL_SSL\n  SaslMechanism: SCRAM-SHA-512\n  SecretRef: kafka-load-creds\n"),
+    "kafka/prod.json": ('{\n  "ConnectionSettings": {"Brokers": "kafka-internal:9092", "SecurityProtocol": "SASL_SSL",\n'
+                        '    "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-internal-creds"}\n}\n'),
+    "kafka/load.json": ('{\n  "ConnectionSettings": {"Brokers": "kafka-load:9092", "SecurityProtocol": "SASL_SSL",\n'
+                        '    "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-load-creds"}\n}\n'),
 }
 _PACKET = "  guid: uuid\n  data: {data}\n{extra}  time_sent: datetime\n  host_ip: ip\n  target_ip: ip\n"
 SCHEMAS = {

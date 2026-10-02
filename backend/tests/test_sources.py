@@ -21,7 +21,7 @@ async def test_profiles_and_schemas(fake, foundry):
     configs = await s.configs()
     assert configs["profiles"]["kafka/prod"] == {"Brokers": "kafka-internal:9092", "SecurityProtocol": "SASL_SSL",
                                                  "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-internal-creds"}
-    assert set(configs["files"]) == {"kafka/prod.yaml", "kafka/load.yaml"} and len(configs["commit"]) == 40
+    assert set(configs["files"]) == {"kafka/prod.json", "kafka/load.json"} and len(configs["commit"]) == 40
     schemas = await s.schemas()
     assert set(schemas) == {"XmlPackets", "Packets", "EnrichedPackets"} == s.schema_names
     assert schemas["EnrichedPackets"]["fields"]["ISP"] == "string" and schemas["XmlPackets"]["format"] == "xml"
@@ -31,7 +31,7 @@ async def test_profiles_and_schemas(fake, foundry):
 async def test_cache_and_refresh(demo_root, fake, foundry):
     s = sources(fake, foundry)
     before = await s.configs()
-    (demo_root / demo.CONFIGS / "kafka" / "dev.yaml").write_text("ConnectionSettings:\n  Brokers: dev:9092\n")
+    (demo_root / demo.CONFIGS / "kafka" / "dev.json").write_text('{"ConnectionSettings": {"Brokers": "dev:9092"}}')
     demo._git(demo_root / demo.CONFIGS, "add", "-A")
     demo._git(demo_root / demo.CONFIGS, "commit", "-qm", "dev")
     assert await s.configs() is before  # cached
