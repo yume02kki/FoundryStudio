@@ -75,14 +75,50 @@ export function autoLayout(nodes: GraphNode[], edges: GraphEdge[], sizes: Record
   }
 
   const size = (id: string): Size => (lanes.has(id) ? { width: 0, height: 0 } : sizes[id] ?? { width: COLUMN - GAP_X, height: ROW - GAP_Y });
+
+  // Vertical placement, column by column: each node aims for the middle of what feeds it so
+  // chains run straight. Lanes stay level with where their wire starts (React Flow draws it as
+  // one curve, so that line must be clear) and the other nodes stack above and below them.
+  const centre = new Map<string, number>();
+  const stack = (ids: string[], mid: number) => {
+    const total = ids.reduce((a, id) => a + size(id).height, 0) + GAP_Y * Math.max(0, ids.length - 1);
+    let y = mid - total / 2;
+    return ids.map((id) => { const c = y + size(id).height / 2; y += size(id).height + GAP_Y; return c; });
+  };
+  columns.forEach((col, r) => {
+    const want = (id: string) => {
+      const ps = r ? preds(id).filter((p) => centre.has(p)) : [];
+      return ps.length ? ps.reduce((a, p) => a + centre.get(p)!, 0) / ps.length : 0;
+    };
+    // Lane levels, kept in column order.
+    let floor = -Infinity;
+    const fixed = new Map<string, number>();
+    for (const id of col) if (lanes.has(id)) { const y = Math.max(want(id), floor); fixed.set(id, y); floor = y + GAP_Y; }
+    // Runs of nodes between lanes: centred on what they want, kept clear of the lanes around them.
+    let run: string[] = [];
+    let above = -Infinity;
+    const place = (below: number) => {
+      if (!run.length) return;
+      const mid = run.reduce((a, id) => a + want(id), 0) / run.length;
+      let cs = stack(run, mid);
+      const top = cs[0] - size(run[0]).height / 2, bottom = cs[cs.length - 1] + size(run[run.length - 1]).height / 2;
+      if (bottom > below - GAP_Y) cs = cs.map((c) => c - (bottom - (below - GAP_Y)));
+      else if (top < above + GAP_Y) cs = cs.map((c) => c + (above + GAP_Y - top));
+      run.forEach((id, k) => centre.set(id, cs[k]));
+      run = [];
+    };
+    for (const id of col) {
+      if (lanes.has(id)) { place(fixed.get(id)!); centre.set(id, fixed.get(id)!); above = fixed.get(id)!; }
+      else run.push(id);
+    }
+    place(Infinity);
+  });
+
   const positions: Layout["positions"] = {};
   let x = 0;
   for (const col of columns) {
-    const total = col.reduce((a, id) => a + size(id).height, 0) + GAP_Y * Math.max(0, col.length - 1);
-    let y = -total / 2;
     for (const id of col) {
-      if (!lanes.has(id)) positions[id] = { x: Math.round(x), y: Math.round(y) };
-      y += size(id).height + GAP_Y;
+      if (!lanes.has(id)) positions[id] = { x: Math.round(x), y: Math.round(centre.get(id)! - size(id).height / 2) };
     }
     x += Math.max(0, ...col.map((id) => size(id).width)) + GAP_X;
   }
