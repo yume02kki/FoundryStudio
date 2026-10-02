@@ -426,20 +426,21 @@ a.chip {
 /* ---------------------------------------------------------------- nodes */
 
 .pnode {
-  min-width: 190px;
-  background: #3a3a3a;
-  border: 1px solid #1a1a1a;
-  border-radius: 6px;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  min-width: 200px;
+  background: linear-gradient(180deg, #3d3d3d 0%, #353535 100%);
+  border: 1px solid #1c1c1c;
+  border-radius: 12px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   font-size: 12px;
 }
 
 .pnode-processor {
-  border-top: 3px solid var(--accent);
+  --kind: #7fb0e6;
 }
 
 .pnode.selected {
   outline: 2px solid #f0c040;
+  outline-offset: 2px;
 }
 
 .pnode.has-error {
@@ -461,25 +462,27 @@ a.chip {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px 0;
+  padding: 9px 12px 0;
 }
 
 .pnode-kind {
   flex: 1;
-  color: var(--muted);
+  color: var(--kind, var(--muted));
   font-size: 10px;
+  font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.8px;
 }
 
 .pnode-title {
-  padding: 0 8px;
+  padding: 2px 12px 0;
   font-weight: 600;
-  font-size: 13px;
+  font-size: 13.5px;
+  color: #ececec;
 }
 
 .pnode-sub {
-  padding: 0 8px 4px;
+  padding: 1px 12px 9px;
   color: var(--muted);
   font-size: 11px;
 }
@@ -487,17 +490,17 @@ a.chip {
 .pnode-ports {
   display: flex;
   justify-content: space-between;
-  gap: 10px;
-  border-top: 1px solid #2a2a2a;
-  background: #333;
-  border-radius: 0 0 6px 6px;
-  padding: 5px 0;
+  gap: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 0 0 11px 11px;
+  padding: 8px 0;
 }
 
 .port-ins {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 6px;
 }
 
 .pnode-processor .pnode-ports {
@@ -1609,12 +1612,12 @@ button.tab:hover:not(.active) {
 /* ---------------------------------------------------------------- datasets */
 
 .pnode-dataset {
-  min-width: 170px;
+  --kind: #6cc4b0;
+  min-width: 180px;
   display: flex;
   align-items: stretch;
-  background: #2f3438;
-  border-left: 4px solid #6b6b6b;
-  border-radius: 14px;
+  background: linear-gradient(180deg, #343b3f 0%, #2d3336 100%);
+  border-radius: 18px;
 }
 
 .pnode-dataset .port {
@@ -1630,15 +1633,17 @@ button.tab:hover:not(.active) {
 }
 
 .dataset-rows {
-  border-top: 1px solid #2a2a2a;
-  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.18);
+  border-radius: 0 0 17px 17px;
+  padding: 6px 0;
 }
 
 .dataset-row {
   display: flex;
   align-items: center;
   font-size: 11px;
-  padding: 2px 0;
+  padding: 3px 0;
 }
 
 .dataset-row-label {
@@ -1660,7 +1665,7 @@ button.tab:hover:not(.active) {
 
 .dataset-body {
   flex: 1;
-  padding: 2px 4px 6px;
+  padding: 0 2px 4px;
 }
 
 .dataset-cluster {
@@ -1668,8 +1673,22 @@ button.tab:hover:not(.active) {
   font-size: 10px;
 }
 
+.dataset-schema::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .dataset-schema {
-  padding: 0 8px 2px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 12px 6px;
+  padding: 1px 9px 1px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
   font-size: 11px;
 }
 
@@ -1809,8 +1828,8 @@ button.chip {
 
 /* Dataset node: its topic under the name. */
 .dataset-topic {
-  padding: 0 8px;
-  font-size: 10px;
+  padding: 1px 12px 8px;
+  font-size: 10.5px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
