@@ -769,6 +769,13 @@ a.chip {
   flex-wrap: wrap;
 }
 
+.card-inputs {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+
 .arrow {
   color: var(--muted);
 }

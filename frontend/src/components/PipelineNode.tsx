@@ -70,9 +70,7 @@ function Port({ nodeId, port, schema, label = true, handle = port, testId = `por
       />
       {label && (
         <span {...labelProps} className={`port-label ${labelProps?.className ?? ""}`} style={{ color }}>
-          {port === "in" ? "▸ " : ""}
           {text ?? schema ?? "untyped"}
-          {port === "out" ? " ▸" : ""}
         </span>
       )}
     </div>

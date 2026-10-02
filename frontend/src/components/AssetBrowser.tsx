@@ -5,7 +5,7 @@ import type { ProcessorInfo } from "../types";
 import { DRAG_MIME } from "./Canvas";
 import { Datasets } from "./Datasets";
 import { LiveData, LiveTabBadges } from "./LiveData";
-import { ANY } from "../lib/rules";
+import { ANY, schemaList } from "../lib/rules";
 
 const FAV_KEY = "foundry-studio.favorites";
 const FAVORITES = "★favorites";
@@ -110,7 +110,13 @@ function Card({ t, favorite, onFavorite }: { t: ProcessorInfo; favorite: boolean
         </button>
       </div>
       <div className="card-types">
-        <SchemaChip schema={version.input} /> <span className="arrow">→</span> <SchemaChip schema={version.output} />
+        {/* One line per input schema (a processor reading several), then what it writes. */}
+        <span className="card-inputs">
+          {(schemaList(version.input) ?? [version.input]).map((s, i) => (
+            <SchemaChip key={i} schema={s} />
+          ))}
+        </span>
+        <span className="arrow">→</span> <SchemaChip schema={version.output} />
       </div>
       <div className="card-foot">
         {t.warnings.length > 0 && (

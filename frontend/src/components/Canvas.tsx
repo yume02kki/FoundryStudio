@@ -14,12 +14,11 @@ import { useCallback, useEffect, useMemo, type DragEvent } from "react";
 import { api } from "../api";
 import { checkConnection } from "../lib/rules";
 import { wires } from "../lib/sockets";
-import { ALL_COLORS } from "../lib/schemaColor";
 import { useStudio, type PEdge, type PNode } from "../store";
 import type { DatasetSpec } from "../types";
 import { placeDataset } from "./Datasets";
 import { DatasetNode, ProcessorNode } from "./PipelineNode";
-import { ArrowMarkers, ConnectionLine, DragTooltip, TopicEdge } from "./TopicEdge";
+import { ConnectionLine, DragTooltip, TopicEdge } from "./TopicEdge";
 
 export const DRAG_MIME = "application/x-foundry-processor";
 export const DATASET_MIME = "application/x-foundry-dataset";
@@ -149,7 +148,6 @@ export function Canvas() {
 
   return (
     <div className="canvas" data-testid="canvas" onDragOver={onDragOver} onDrop={onDrop}>
-      <ArrowMarkers colors={ALL_COLORS} />
       <ReactFlow<PNode, PEdge>
         nodes={nodes}
         edges={drawn}

@@ -32,7 +32,6 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
       <BaseEdge
         id={id}
         path={path}
-        markerEnd={`url(#arrow-${errors.length ? "error" : color.slice(1)})`}
         style={{ stroke, strokeWidth: selected || focused ? 3 : 2, opacity: focused || selected ? 1 : 0.85 }}
       />
       {flow.active && !errors.length && (
@@ -74,29 +73,5 @@ export function DragTooltip() {
     <div className="drag-tooltip" data-testid="drag-tooltip" style={{ left: at.x, top: at.y - 18 }}>
       {shortReason(check.reason)}
     </div>
-  );
-}
-
-/** Arrow markers, one per schema colour (plus the error colour). */
-export function ArrowMarkers({ colors }: { colors: string[] }) {
-  return (
-    <svg style={{ position: "absolute", width: 0, height: 0 }}>
-      <defs>
-        {[...new Set([...colors, "error"])].map((c) => (
-          <marker
-            key={c}
-            id={`arrow-${c === "error" ? "error" : c.slice(1)}`}
-            viewBox="0 0 10 10"
-            refX="9"
-            refY="5"
-            markerWidth="7"
-            markerHeight="7"
-            orient="auto-start-reverse"
-          >
-            <path d="M 0 0 L 10 5 L 0 10 z" fill={c === "error" ? "var(--error)" : c} />
-          </marker>
-        ))}
-      </defs>
-    </svg>
   );
 }
