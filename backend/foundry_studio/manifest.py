@@ -1,6 +1,6 @@
 """UI graph <-> PipelineManifest.yaml.
 
-The manifest format is the contract with manifest.py (foundry-common/scripts), so the UI
+The manifest format is the contract with manifest.py (foundry-platform/common/scripts), so the UI
 never invents fields. On the canvas, transforms and datasets are both nodes: an edge
 dataset -> transform is the transform's In, transform -> dataset its Out. A transform has
 exactly one of each. Every entry under DataSets is a dataset node, wired or not. Node
@@ -25,7 +25,7 @@ DATASET_KEYS = ("Type", "Config", "DataSchema", "Topic", "ConnectionSettings")
 CONNECTION_KEYS = ("Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef")
 TOP_LEVEL = ("Name", "Configs", "DataSets", "Transforms")
 
-HEADER = ("# yaml-language-server: $schema=https://gitlab.com/foundry-common/scripts/-/jobs/artifacts/main/raw/"
+HEADER = ("# yaml-language-server: $schema=https://gitlab.com/foundry-platform/common/scripts/-/jobs/artifacts/main/raw/"
           "manifest.schema.json?job=schema")
 REF_COMMENT = "  # Ref: v1   # optional, defaults to main"
 DATASETS_COMMENT = "# DataSchema names a schema in the Configs repo\'s schemas/ (types in the Foundry.Common.Models package)."

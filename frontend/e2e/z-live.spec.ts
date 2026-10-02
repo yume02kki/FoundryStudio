@@ -31,7 +31,7 @@ test("a new tag and a new transformer show up live; the picked version is saved 
   await page.getByTestId("save").click();
   await expect(page.getByTestId("saved")).toBeVisible();
   const saved = await (await page.request.get("/api/pipelines/PacketPipeline")).json();
-  expect(saved.manifest).toContain("    Repo: https://gitlab.com/foundry-enrichers/decodingtransformer.git\n    Ref: v1.1.0\n");
+  expect(saved.manifest).toContain("    Repo: https://gitlab.com/foundry-platform/enrichers/decodingtransformer.git\n    Ref: v1.1.0\n");
 
   expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload)).toBe(true);
 });

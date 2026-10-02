@@ -140,10 +140,16 @@ class FakeGitLab:
 
     def projects_sync(self) -> list[dict]:
         out = []
-        for ns in sorted(p for p in self.root.iterdir() if p.is_dir()) if self.root.is_dir() else []:
-            for repo in sorted(p for p in ns.iterdir() if p.is_dir()):
-                if (repo / ".git").exists() or (repo / "HEAD").is_file():
-                    out.append(self.project_sync(f"{ns.name}/{repo.name}"))
+
+        def walk(d: Path) -> None:  # nested groups: a repo can sit at any depth
+            for p in sorted(p for p in d.iterdir() if p.is_dir()):
+                if (p / ".git").exists() or (p / "HEAD").is_file():
+                    out.append(self.project_sync(p.relative_to(self.root).as_posix()))
+                elif p.name != ".git":
+                    walk(p)
+
+        if self.root.is_dir():
+            walk(self.root)
         return out
 
     # -- async GitLab interface --------------------------------------------------------- #

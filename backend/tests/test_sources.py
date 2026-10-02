@@ -11,7 +11,7 @@ from foundry_studio.sources import SourceError, Sources
 
 
 def sources(fake, foundry, ttl=30.0) -> Sources:
-    return Sources(fake, "https://gitlab.com", foundry.manifest, "https://gitlab.com/foundry-common/configs.git",
+    return Sources(fake, "https://gitlab.com", foundry.manifest, "https://gitlab.com/foundry-platform/common/configs.git",
                    ttl=ttl)
 
 
@@ -53,6 +53,6 @@ def test_catalog_endpoint(services):
     with TestClient(create_app(services, start_watcher=False)) as c:
         cat = c.get("/api/catalog").json()
         assert list(cat["profiles"]) == ["kafka/load", "kafka/prod"] and cat["errors"] == {}
-        assert cat["configs"]["repo"] == "https://gitlab.com/foundry-common/configs.git"
+        assert cat["configs"]["repo"] == "https://gitlab.com/foundry-platform/common/configs.git"
         assert "data" not in cat["schemas"]["Packets"]
         assert "configs" in c.get("/api/catalog?ref=nope").json()["errors"]

@@ -39,7 +39,7 @@ class Sources:
         self.schema_names: set[str] = set()  # last known, for synchronous callers (discovery)
 
     def project_of(self, repo: str) -> str:
-        """https://gitlab.com/foundry-common/configs.git -> foundry-common/configs (on this GitLab only)."""
+        """https://gitlab.com/foundry-platform/common/configs.git -> foundry-platform/common/configs (on this GitLab only)."""
         base = self.gitlab_url.split("://", 1)[-1]
         url = repo.strip().split("://", 1)[-1].removesuffix("/").removesuffix(".git")
         if not url.startswith(f"{base}/"):

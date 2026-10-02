@@ -23,17 +23,17 @@ class Settings:
     poll_interval: float = 10.0
     # Full rescan even without events, to catch anything the events API missed.
     full_rescan_interval: float = 300.0
-    # Checkout of foundry-common/scripts at the pinned commit (git submodule): manifest.py.
+    # Checkout of foundry-platform/common/scripts at the pinned commit (git submodule): manifest.py.
     scripts_dir: Path = REPO_ROOT / "vendor" / "scripts"
     # The pipelines Studio edits: <workspace>/<folder>/PipelineManifest.yaml, one folder (a
     # pipeline repo checkout, ideally) per pipeline. None: <repo>/workspace (or the demo's).
     workspace: Path | None = None
     # The pipelines repo, one folder per pipeline; the workspace is kept a checkout of it. None: the
     # workspace is a plain folder (the default with a fake GitLab).
-    pipelines_repo: str | None = "https://gitlab.com/foundry-common/foundry-pipelines.git"
+    pipelines_repo: str | None = "https://gitlab.com/foundry-platform/foundry-pipelines.git"
     # Connection profiles (kafka/<name>.yaml) and schemas (schemas/*.yaml) for manifests without
     # Configs.Repo, and new ones; the schemas here are also what transformer.yaml files are checked against.
-    configs_repo: str = "https://gitlab.com/foundry-common/configs.git"
+    configs_repo: str = "https://gitlab.com/foundry-platform/common/configs.git"
     # "demo" or a directory: serve GitLab from local git repos instead of gitlab.com.
     fake_gitlab: str | None = None
     # Kafka credentials for the live feed, laid out like the transformer runtime's:

@@ -43,7 +43,7 @@ def test_renaming_keeps_the_folder(client, demo_root):
 
 def test_new_pipeline_gets_its_own_folder(client, demo_root):
     template = client.get("/api/template").json()
-    assert template["configs"] == {"Repo": "https://gitlab.com/foundry-common/configs.git"}
+    assert template["configs"] == {"Repo": "https://gitlab.com/foundry-platform/common/configs.git"}
     r = client.post("/api/pipelines", json={"graph": {**template, "name": "Fresh"}})
     assert r.json()["folder"] == "Fresh"
     assert manifest_to_graph((demo.workspace(demo_root) / "Fresh" / "PipelineManifest.yaml").read_text())["name"] == "Fresh"

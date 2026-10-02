@@ -5,8 +5,8 @@
     python -m foundry_studio.demo add Deduplicate Packets Packets "Drops repeated guids"
     python -m foundry_studio.demo remove Deduplicate
 
-The repos mirror the real ones: foundry-common/configs (connection profiles and schemas)
-and one foundry-enrichers project per transformer,
+The repos mirror the real ones: foundry-platform/common/configs (connection profiles and schemas)
+and one foundry-platform/enrichers project per transformer,
 each with a transformer.yaml at its root. The workspace holds PacketPipeline. Nothing here
 needs a token, Docker or Kafka; Live data shows generated records.
 """
@@ -23,8 +23,8 @@ from pathlib import Path
 from .config import REPO_ROOT
 
 DEFAULT_ROOT = REPO_ROOT / ".demo-gitlab"
-CONFIGS = "foundry-common/configs"
-ENRICHERS = "foundry-enrichers"
+CONFIGS = "foundry-platform/common/configs"
+ENRICHERS = "foundry-platform/enrichers"
 
 # Fixed dates keep commit SHAs identical across `init` runs.
 FIXED_DATE = "2026-09-01T12:00:00+00:00"
@@ -47,7 +47,7 @@ TRANSFORMERS = {  # project -> (name, in, out, description)
     "IspEnricher": ("Isp", "Packets", "EnrichedPackets", "Adds the ISP of host_ip, from CIDR ranges in appsettings."),
 }
 MANIFEST = f"""\
-# yaml-language-server: $schema=https://gitlab.com/foundry-common/scripts/-/jobs/artifacts/main/raw/manifest.schema.json?job=schema
+# yaml-language-server: $schema=https://gitlab.com/foundry-platform/common/scripts/-/jobs/artifacts/main/raw/manifest.schema.json?job=schema
 Name: EnrichmentPipeline
 
 Configs:

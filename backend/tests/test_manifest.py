@@ -14,7 +14,7 @@ from foundry_studio.manifest import graph_to_manifest, manifest_to_graph, wiring
 def test_round_trip_is_byte_identical():
     graph = manifest_to_graph(demo.MANIFEST)
     assert graph["name"] == "EnrichmentPipeline"
-    assert graph["configs"] == {"Repo": "https://gitlab.com/foundry-common/configs.git"}
+    assert graph["configs"] == {"Repo": "https://gitlab.com/foundry-platform/common/configs.git"}
     assert graph_to_manifest(graph) == demo.MANIFEST
 
 
@@ -33,7 +33,7 @@ def test_graph_shape():
     assert datasets["ConvertedPackets"] == {"Type": "Kafka", "Config": "kafka/prod", "DataSchema": "Packets",
                                             "Topic": "enrichment.packets"}
     isp = next(n for n in graph["nodes"] if n["id"] == "Isp")
-    assert isp["transformer"] == {"Repo": "https://gitlab.com/foundry-enrichers/IspEnricher.git"}
+    assert isp["transformer"] == {"Repo": "https://gitlab.com/foundry-platform/enrichers/IspEnricher.git"}
     assert wiring(graph)["Isp"] == {"Inputs": ["ConvertedPackets"], "Outputs": ["Output"]}
 
 

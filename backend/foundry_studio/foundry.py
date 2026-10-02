@@ -1,4 +1,4 @@
-"""Access to the pinned foundry-common/scripts checkout: manifest.py as a library.
+"""Access to the pinned foundry-platform/common/scripts checkout: manifest.py as a library.
 
 manifest.py is the single source of truth for what a valid PipelineManifest.yaml is; the
 `manifest.py validate` CLI runs the same check(). Nothing here re-implements a rule; we
@@ -64,7 +64,7 @@ class Foundry:
         if not (root / "manifest" / "manifest.py").is_file():
             raise RuntimeError(
                 f"{root}/manifest/manifest.py not found; run `git submodule update --init` "
-                "(foundry-common/scripts is pinned in vendor/scripts)"
+                "(foundry-platform/common/scripts is pinned in vendor/scripts)"
             )
 
     @cached_property

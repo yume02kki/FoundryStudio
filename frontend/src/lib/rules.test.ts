@@ -6,8 +6,8 @@ const info = (name: string, input: string, output: string, tagged?: [string, str
   const branch = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "transformer.yaml", warnings: [], web_url: "" };
   const tag = tagged && { ...branch, ref: "v1.0.0", label: "v1.0.0", kind: "tag" as const, commit: "def", input: tagged[0], output: tagged[1] };
   return {
-    id: `foundry-enrichers/${name}:`, project: `foundry-enrichers/${name}`, path: "", name, description: "",
-    repo: `https://gitlab.com/foundry-enrichers/${name}.git`, web_url: "", input, output, warnings: [],
+    id: `foundry-platform/enrichers/${name}:`, project: `foundry-platform/enrichers/${name}`, path: "", name, description: "",
+    repo: `https://gitlab.com/foundry-platform/enrichers/${name}.git`, web_url: "", input, output, warnings: [],
     latest: tag ? "v1.0.0" : "abc", head: "abc", versions: tag ? [tag, branch] : [branch],
   };
 };
@@ -15,7 +15,7 @@ const transformers: Transformers = Object.fromEntries(
   [info("XmlToJson", "XmlPackets", "Packets"), info("Decode", "Packets", "EnrichedPackets", ["XmlPackets", "Packets"])].map((i) => [i.id, i]),
 );
 const t = (id: string, Ref?: string): GraphNode => ({
-  id, kind: "transformer", transformer: { Repo: `https://gitlab.com/foundry-enrichers/${id}.git`, ...(Ref ? { Ref } : {}) },
+  id, kind: "transformer", transformer: { Repo: `https://gitlab.com/foundry-platform/enrichers/${id}.git`, ...(Ref ? { Ref } : {}) },
 });
 const d = (name: string, DataSchema: string): GraphNode => ({
   id: `dataset:${name}`, kind: "dataset", dataset: name, datasetSpec: { Type: "Kafka", Config: "kafka/prod", DataSchema, Topic: name.toLowerCase() },
