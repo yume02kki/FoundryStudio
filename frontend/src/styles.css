@@ -1619,8 +1619,10 @@ button.tab:hover:not(.active) {
 }
 
 .pnode-dataset .port-ins {
-  align-self: center;
-  gap: 10px;
+  align-self: stretch;
+  justify-content: space-evenly;
+  gap: 16px;
+  padding: 6px 0;
 }
 
 .pnode-dataset .port-out {
