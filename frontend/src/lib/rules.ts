@@ -20,15 +20,20 @@ export type RefusalKind = "kind" | "duplicate" | "type" | "cycle" | "self" | "si
 
 export type Processors = Record<string, ProcessorInfo>;
 
-/** The schema a dataset carries (its DataSchema). */
+/** The schema name for "no schema"; an omitted schema means the same. Any matches every schema. */
+export const ANY = "Any";
+
+const typed = (schema: string | null | undefined) => (schema && schema !== ANY ? schema : undefined);
+
+/** The schema a dataset carries (its DataSchema); undefined for Any. */
 export function datasetSchema(node: GraphNode | undefined): string | undefined {
-  return node?.datasetSpec?.DataSchema || undefined;
+  return typed(node?.datasetSpec?.DataSchema);
 }
 
 /** A processor's in and out schemas: its processor.yaml at its Ref (no Ref: the default branch). */
 export function processorschemas(node: GraphNode | undefined, processors: Processors): { input?: string; output?: string } {
   const v = versionFor(findInfo(node?.processor, Object.values(processors)), node?.processor?.Ref);
-  return { input: v?.input ?? undefined, output: v?.output ?? undefined };
+  return { input: typed(v?.input), output: typed(v?.output) };
 }
 
 /** The schema a node writes: a processor's out, a dataset's own schema. */

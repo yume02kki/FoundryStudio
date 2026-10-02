@@ -50,7 +50,7 @@ def test_errors_are_located(client):
     dataset(g, "ConvertedPackets")["datasetSpec"]["Config"] = "kafka/missing"
     del dataset(g, "Input")["datasetSpec"]["Topic"]
     errors = {e["message"]: e for e in validate(client, g)}
-    assert errors["DataSets.Output.DataSchema: unknown schema 'Nope' (known: EnrichedPackets, Packets, XmlPackets)"][
+    assert errors["DataSets.Output.DataSchema: unknown schema 'Nope' (known: Any, EnrichedPackets, Packets, XmlPackets)"][
         "node"] == "dataset:Output"
     assert errors["DataSets.ConvertedPackets: Config 'kafka/missing' not found (known: kafka/load, kafka/prod)"][
         "node"] == "dataset:ConvertedPackets"

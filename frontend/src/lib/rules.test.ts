@@ -53,6 +53,13 @@ describe("checkConnection", () => {
     expect(!into.ok && shortReason(into.reason)).toBe("Input carries XmlPackets but Decode reads Packets");
   });
 
+  it("lets Any connect to every schema", () => {
+    const g = base();
+    g.nodes.push(d("Untyped", "Any"));
+    expect(checkConnection(g, processors, "XmlToJson", "dataset:Untyped")).toEqual({ ok: true });
+    expect(checkConnection(g, processors, "dataset:Untyped", "Decode")).toEqual({ ok: true });
+  });
+
   it("allows one In and one Out per processor", () => {
     const g = base();
     g.nodes.push(d("Other", "XmlPackets"));

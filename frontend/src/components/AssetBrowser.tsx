@@ -5,6 +5,7 @@ import type { ProcessorInfo } from "../types";
 import { DRAG_MIME } from "./Canvas";
 import { Datasets } from "./Datasets";
 import { LiveData, LiveTabBadges } from "./LiveData";
+import { ANY } from "../lib/rules";
 
 const FAV_KEY = "foundry-studio.favorites";
 const FAVORITES = "★favorites";
@@ -77,7 +78,7 @@ function treeEntries(projects: string[], processors: ProcessorInfo[]): TreeEntry
 function SchemaChip({ schema }: { schema: string | null }) {
   return (
     <span className="schema-chip" style={{ borderColor: schemaColor(schema), color: schemaColor(schema) }}>
-      {schema ?? "?"}
+      {schema || ANY}
     </span>
   );
 }

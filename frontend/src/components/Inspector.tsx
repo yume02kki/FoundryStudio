@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { inputsOf, outputsOf, processorschemas } from "../lib/rules";
+import { ANY, inputsOf, outputsOf, processorschemas } from "../lib/rules";
 import { edgeDataset } from "../lib/stages";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, versionFor } from "../lib/versions";
@@ -87,7 +87,7 @@ function Issues({ issues }: { issues: Issue[] }) {
 function SchemaChip({ schema }: { schema: string | undefined | null }) {
   return (
     <span className="schema-chip" style={{ color: schemaColor(schema), borderColor: schemaColor(schema) }}>
-      {schema ?? "?"}
+      {schema || ANY}
     </span>
   );
 }
@@ -331,8 +331,8 @@ function DatasetInspector({ node }: { node: GraphNode }) {
       <Field label="Profile" hint="Config: a connection profile from the configs repo">
         <Select value={spec?.Config} options={profiles} onChange={(v) => set({ Config: v })} testId="dataset-profile" />
       </Field>
-      <Field label="Schema" hint="DataSchema: a schema in the configs repo's schemas/">
-        <Select value={spec?.DataSchema} options={schemas} onChange={(v) => set({ DataSchema: v })} testId="dataset-schema" />
+      <Field label="Schema" hint={`DataSchema: a schema in the configs repo's schemas/, or ${ANY} for none`}>
+        <Select value={spec?.DataSchema} options={[ANY, ...schemas]} onChange={(v) => set({ DataSchema: v })} testId="dataset-schema" />
       </Field>
       {info && (
         <div className="schema-fields" data-testid="dataset-fields">
