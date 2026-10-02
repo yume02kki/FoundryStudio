@@ -50,8 +50,13 @@ function toPNode(spec: GraphNode, position: { x: number; y: number }): PNode {
   return { id: spec.id, type: spec.kind, position, data: { spec } };
 }
 
-function toPEdge(source: string, target: string): PEdge {
-  return { id: edgeId(source, target), source, target, sourceHandle: "out", targetHandle: "in", type: "topic" };
+/** A flink processor reads several datasets: each wire into it gets its own input socket, in:<dataset node>. */
+export const isFlink = (spec: GraphNode | undefined) => spec?.kind === "processor" && spec.processor?.Runtime === "flink";
+export const inputHandle = (source: string) => `in:${source}`;
+
+function toPEdge(source: string, target: string, nodes: PNode[]): PEdge {
+  const flink = isFlink(nodes.find((n) => n.id === target)?.data.spec);
+  return { id: edgeId(source, target), source, target, sourceHandle: "out", targetHandle: flink ? inputHandle(source) : "in", type: "topic" };
 }
 
 interface State {
@@ -160,10 +165,11 @@ export const useStudio = create<State>()((set, get) => ({
   load: (graph, layout, origin) => {
     const auto = autoLayout(graph.nodes, graph.edges);
     const pos = (id: string) => layout?.positions?.[id] ?? auto[id] ?? { x: 0, y: 0 };
+    const nodes = graph.nodes.map((n) => toPNode(n, pos(n.id)));
     set((s) => ({
       meta: { name: graph.name, configs: graph.configs ?? {}, extra: graph.extra ?? {} },
-      nodes: graph.nodes.map((n) => toPNode(n, pos(n.id))),
-      edges: graph.edges.map((e) => toPEdge(e.source, e.target)),
+      nodes,
+      edges: graph.edges.map((e) => toPEdge(e.source, e.target, nodes)),
       origin,
       loadId: s.loadId + 1,
       revision: s.revision + 1,
@@ -202,7 +208,7 @@ export const useStudio = create<State>()((set, get) => ({
     set((s) =>
       s.edges.some((e) => e.source === source && e.target === target)
         ? s
-        : { edges: [...s.edges, toPEdge(source, target)], revision: s.revision + 1, dirty: true },
+        : { edges: [...s.edges, toPEdge(source, target, s.nodes)], revision: s.revision + 1, dirty: true },
     ),
 
   addProcessor: (info, ref, position) => {
@@ -256,10 +262,11 @@ export const useStudio = create<State>()((set, get) => ({
     if (s.nodes.some((n) => n.id === to)) return `${toName} already exists`;
     const ren = (id: string) => (id === from ? to : id);
     const renamed = (spec: GraphNode): GraphNode => ({ ...spec, id: to, ...(dataset ? { dataset: datasetName(to) } : {}) });
+    const nodes = s.nodes.map((n) => (n.id === from ? { ...n, id: to, data: { spec: renamed(n.data.spec) } } : n));
     set({
-      nodes: s.nodes.map((n) => (n.id === from ? { ...n, id: to, data: { spec: renamed(n.data.spec) } } : n)),
+      nodes,
       edges: s.edges.map((e) =>
-        e.source === from || e.target === from ? { ...toPEdge(ren(e.source), ren(e.target)), selected: e.selected } : e,
+        e.source === from || e.target === from ? { ...toPEdge(ren(e.source), ren(e.target), nodes), selected: e.selected } : e,
       ),
       revision: s.revision + 1,
       dirty: true,

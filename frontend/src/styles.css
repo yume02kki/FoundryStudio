@@ -494,6 +494,16 @@ a.chip {
   padding: 5px 0;
 }
 
+.port-ins {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.pnode-processor .pnode-ports {
+  align-items: center;
+}
+
 .pnode-errors {
   color: var(--error);
   font-size: 11px;

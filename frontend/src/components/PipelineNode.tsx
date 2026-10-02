@@ -1,9 +1,10 @@
 import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
-import { checkConnection, datasetSchema, emits, expects } from "../lib/rules";
+import { checkConnection, datasetSchema, emits, expects, schemaList } from "../lib/rules";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, updateFor, versionFor } from "../lib/versions";
-import { issuesFor, useStudio, type PNode } from "../store";
+import { inputHandle, isFlink, issuesFor, useStudio, type PNode } from "../store";
+import { datasetName } from "../types";
 import { NodeActivity } from "./LiveData";
 
 type PortState = "idle" | "compatible" | "incompatible" | "origin";
@@ -21,13 +22,16 @@ function usePortState(nodeId: string, port: "in" | "out"): PortState {
   return checkConnection(s.graph(), s.processors, a, b).ok ? "compatible" : "incompatible";
 }
 
-function Port({ nodeId, port, schema, label = true }: { nodeId: string; port: "in" | "out"; schema?: string; label?: boolean }) {
+function Port({ nodeId, port, schema, label = true, handle = port, testId = `port-${nodeId}-${port}`, text, title, connectable = true }: {
+  nodeId: string; port: "in" | "out"; schema?: string; label?: boolean; handle?: string; testId?: string; text?: string; title?: string; connectable?: boolean;
+}) {
   const state = usePortState(nodeId, port);
   const color = schemaColor(schema);
   return (
-    <div className={`port port-${port} port-${state}`} data-testid={`port-${nodeId}-${port}`} data-schema={schema ?? ""}>
+    <div className={`port port-${port} port-${state}`} data-testid={testId} data-schema={schema ?? ""} title={title}>
       <Handle
-        id={port}
+        id={handle}
+        isConnectableEnd={connectable}
         type={port === "in" ? "target" : "source"}
         position={port === "in" ? Position.Left : Position.Right}
         className="handle"
@@ -36,7 +40,7 @@ function Port({ nodeId, port, schema, label = true }: { nodeId: string; port: "i
       {label && (
         <span className="port-label" style={{ color }}>
           {port === "in" ? "▸ " : ""}
-          {schema ?? "untyped"}
+          {text ?? schema ?? "untyped"}
           {port === "out" ? " ▸" : ""}
         </span>
       )}
@@ -93,10 +97,35 @@ function ProcessorNodeView({ id, data, selected }: NodeProps<PNode>) {
       <div className="pnode-sub">{subtitle}</div>
       <NodeActivity node={id} />
       <div className="pnode-ports">
-        <Port nodeId={id} port="in" schema={expects(spec, processors)} />
+        {isFlink(spec) ? <FlinkInputs id={id} /> : <Port nodeId={id} port="in" schema={expects(spec, processors)} />}
         <Port nodeId={id} port="out" schema={emits(spec, processors)} />
       </div>
       {errors.length > 0 && <div className="pnode-errors">{errors.length} issue{errors.length > 1 ? "s" : ""}</div>}
+    </div>
+  );
+}
+
+/**
+ * A flink processor's inputs, like a Blender node's: one socket per dataset it reads (showing what that dataset
+ * carries), plus a spare socket to wire another, labeled with the declared input schemas no wire covers yet.
+ */
+function FlinkInputs({ id }: { id: string }) {
+  const edges = useStudio((s) => s.edges);
+  const nodes = useStudio((s) => s.nodes);
+  const processors = useStudio((s) => s.processors);
+  const spec = nodes.find((n) => n.id === id)?.data.spec;
+  const sources = [...new Set(edges.filter((e) => e.target === id).map((e) => e.source))].sort();
+  const carried = (source: string) => datasetSchema(nodes.find((n) => n.id === source)?.data.spec);
+  const covered = new Set(sources.flatMap((s) => schemaList(carried(s)) ?? []));
+  const missing = (schemaList(expects(spec, processors)) ?? []).filter((s) => !covered.has(s));
+  return (
+    <div className="port-ins">
+      {sources.map((source) => (
+        <Port key={source} nodeId={id} port="in" handle={inputHandle(source)} testId={`port-${id}-in-${datasetName(source)}`}
+          schema={carried(source)} title={datasetName(source)} connectable={false} />
+      ))}
+      <Port nodeId={id} port="in" schema={missing.join(" | ") || undefined} text={missing.length ? `+ ${missing.join(" | ")}` : "+"}
+        title="Wire another dataset in" />
     </div>
   );
 }
