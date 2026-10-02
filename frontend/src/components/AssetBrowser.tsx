@@ -38,12 +38,22 @@ interface TreeEntry {
 /**
  * The tree shows transformers, not raw git directories: a repo, the folders that only
  * group transformers, and each transformer (a crate directory) under its own name.
+ * A repo that is a single transformer is just that transformer.
  */
+function transformerEntry(project: string, path: string, depth: number, t: TransformerInfo): TreeEntry {
+  return { key: `${project}:${path}`, project, path, label: t.name, depth, kind: "transformer",
+           title: `${t.input ?? "?"} → ${t.output ?? "?"}${t.description ? `\n${t.description}` : ""}` };
+}
+
 function treeEntries(projects: string[], transformers: TransformerInfo[]): TreeEntry[] {
   const out: TreeEntry[] = [];
   for (const project of projects) {
-    out.push({ key: `${project}:`, project, path: "", label: project.split("/").pop() ?? project, depth: 0, kind: "repo", title: project });
     const mine = transformers.filter((t) => t.project === project);
+    if (mine.length === 1 && !mine[0].path) {
+      out.push(transformerEntry(project, "", 0, mine[0]));
+      continue;
+    }
+    out.push({ key: `${project}:`, project, path: "", label: project.split("/").pop() ?? project, depth: 0, kind: "repo", title: project });
     const crates = new Map(mine.map((t) => [t.path, t]));
     const groups = new Set<string>();
     for (const t of mine) {
@@ -56,9 +66,8 @@ function treeEntries(projects: string[], transformers: TransformerInfo[]): TreeE
       const depth = path ? path.split("/").length : 1;
       out.push(
         t
-          ? { key: `${project}:${path}`, project, path, label: t.name, depth, kind: "transformer",
-              title: `${t.input ?? "?"} → ${t.output ?? "?"}${t.description ? `\n${t.description}` : ""}` }
-          : { key: `${project}:${path}`, project, path, label: path.split("/").pop()!, depth, kind: "folder", title: path },
+          ? transformerEntry(project, path, depth, t)
+          :{ key: `${project}:${path}`, project, path, label: path.split("/").pop()!, depth, kind: "folder", title: path },
       );
     }
   }
