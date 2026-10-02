@@ -125,14 +125,9 @@ A transformer's versions are its `v*` tags (`<Path>/v*` in a folder), newest sem
 | `FOUNDRY_SECRETS_DIR` | `/var/run/secrets/foundry` | Kafka credentials for Live data |
 | `FOUNDRY_SCRIPTS_DIR` | `./vendor/scripts` | Use another foundry-common/scripts checkout |
 
-## Running Studio on a server
+## CI and deployment
 
-```sh
-scripts/deploy_server.sh ubuntu@<host>          # from your machine, in this checkout
-ssh -N -L 8000:127.0.0.1:8000 ubuntu@<host>      # then open http://localhost:8000
-```
-
-Studio has no login, so it listens on **127.0.0.1 only**. Settings go in `/etc/foundry-studio.env` (mode 600).
+`.github/workflows/ci.yml` runs the tests on every push and PR. On `main` it also builds the arm64 image (`Dockerfile`), pushes it to `ghcr.io/yume02kki/foundrystudio`, and deploys the `deploy/foundry-studio` Helm chart to the k3s node over SSH (secrets `DEPLOY_HOST`, `DEPLOY_SSH_KEY`, `DEPLOY_KNOWN_HOSTS`). Settings such as `GITLAB_TOKEN` live in the cluster secret `foundry-studio-env`.
 
 ## Tests
 

@@ -1,0 +1,78 @@
+# Tests every push and PR; on main, also builds the image (arm64, like the k3s node), pushes it to
+# GHCR and deploys it with deploy/foundry-studio over SSH (the cluster API isn't reachable from here).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/foundrystudio
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: true}
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with: {node-version: 20, cache: npm, cache-dependency-path: frontend/package-lock.json}
+      - name: Backend
+        working-directory: backend
+        run: uv sync && uv run pytest -q
+      - name: Frontend
+        working-directory: frontend
+        run: npm ci && npx tsc -b && npx vitest run
+
+  image:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: ubuntu-24.04-arm
+    permissions: {contents: read, packages: write}
+    steps:
+      - uses: actions/checkout@v4
+        with: {submodules: true}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with: {registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}"}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }},${{ env.IMAGE }}:latest
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: image
+    runs-on: ubuntu-latest
+    environment: production
+    permissions: {contents: read, packages: read}
+    steps:
+      - uses: actions/checkout@v4
+      - name: SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          echo "${{ secrets.DEPLOY_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+      - name: Deploy
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ssh="ssh -i ~/.ssh/deploy $HOST"
+          rsync -a --delete -e "ssh -i ~/.ssh/deploy" deploy/foundry-studio/ "$HOST:/opt/k8s-apps/charts/foundry-studio/"
+          # The node pulls with this run's token, so the package needn't be public.
+          echo "$TOKEN" | $ssh "sudo k3s ctr images pull --user '${{ github.actor }}:'\"\$(cat)\" $IMAGE:${{ github.sha }} >/dev/null"
+          $ssh "export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            sudo -E helm upgrade foundry-studio /opt/k8s-apps/charts/foundry-studio -n apps --set image.tag=${{ github.sha }}
+            sudo -E kubectl -n apps rollout status deploy/foundry-studio --timeout=180s"

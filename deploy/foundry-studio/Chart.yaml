@@ -1,0 +1,4 @@
+apiVersion: v2
+name: foundry-studio
+description: Foundry Studio. CI (.github/workflows/ci.yml) builds the image and deploys this chart.
+version: 1.2.0

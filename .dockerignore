@@ -1,0 +1,9 @@
+**/node_modules
+**/.venv
+**/__pycache__
+**/.pytest_cache
+.git
+.demo-gitlab
+workspace
+frontend/dist
+frontend/test-results
