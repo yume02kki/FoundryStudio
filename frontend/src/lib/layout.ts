@@ -38,6 +38,24 @@ export function autoLayout(nodes: GraphNode[], edges: GraphEdge[], sizes: Record
   const columns: string[][] = Array.from({ length: depth + 1 }, () => []);
   for (const n of nodes) columns[rank.get(n.id)!].push(n.id);
 
+  // A wire skipping columns gets a placeholder in each column it crosses, so it keeps its own
+  // lane instead of running behind the nodes in between.
+  const lanes = new Set<string>();
+  for (const e of [...links]) {
+    const from = rank.get(e.source)!, to = rank.get(e.target)!;
+    if (to - from < 2) continue;
+    links.splice(links.indexOf(e), 1);
+    let prev = e.source;
+    for (let r = from + 1; r < to; r++) {
+      const lane = `\0${e.source}>${e.target}@${r}`;
+      lanes.add(lane);
+      columns[r].push(lane);
+      links.push({ source: prev, target: lane });
+      prev = lane;
+    }
+    links.push({ source: prev, target: e.target });
+  }
+
   // Barycentre ordering, sweeping down and back up a few times.
   const index = new Map<string, number>();
   const reindex = () => columns.forEach((col) => col.forEach((id, i) => index.set(id, i)));
@@ -56,14 +74,14 @@ export function autoLayout(nodes: GraphNode[], edges: GraphEdge[], sizes: Record
     for (let r = depth - 1; r >= 0; r--) { sortBy(columns[r], succs); reindex(); }
   }
 
-  const size = (id: string): Size => sizes[id] ?? { width: COLUMN - GAP_X, height: ROW - GAP_Y };
+  const size = (id: string): Size => (lanes.has(id) ? { width: 0, height: 0 } : sizes[id] ?? { width: COLUMN - GAP_X, height: ROW - GAP_Y });
   const positions: Layout["positions"] = {};
   let x = 0;
   for (const col of columns) {
     const total = col.reduce((a, id) => a + size(id).height, 0) + GAP_Y * Math.max(0, col.length - 1);
     let y = -total / 2;
     for (const id of col) {
-      positions[id] = { x: Math.round(x), y: Math.round(y) };
+      if (!lanes.has(id)) positions[id] = { x: Math.round(x), y: Math.round(y) };
       y += size(id).height + GAP_Y;
     }
     x += Math.max(0, ...col.map((id) => size(id).width)) + GAP_X;

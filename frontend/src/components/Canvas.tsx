@@ -175,7 +175,7 @@ export function Canvas() {
             data-testid="arrange"
             onClick={() => {
               useStudio.getState().arrange();
-              setTimeout(() => flow.fitView({ padding: 0.25, duration: 300, maxZoom: 1.2 }), 30);
+              setTimeout(() => flow.fitView({ padding: 0.25, duration: 300, maxZoom: 1.2 }), 100);
             }}
           >
             <svg viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="2" width="5" height="4" rx="1" /><rect x="10" y="2" width="5" height="4" rx="1" /><rect x="10" y="10" width="5" height="4" rx="1" /><path d="M6 4h4M8 4v8h2" stroke="currentColor" strokeWidth="1.3" fill="none" /></svg>
