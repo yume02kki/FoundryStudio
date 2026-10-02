@@ -85,3 +85,11 @@ def test_flink_inputs_and_union_schemas_round_trip():
     again = yaml.safe_load(graph_to_manifest(manifest_to_graph(text.read_text())))
     assert again["Processors"]["Join"] == raw["Processors"]["Join"]
     assert again["DataSets"]["Enrichments"]["DataSchema"] == ["DecodeEnrichment", "IspEnrichment"]
+
+
+def test_entry_comments_survive_a_save():
+    text = demo.MANIFEST.replace("  Input:\n", "  # where packets come in\n  Input:\n", 1)
+    text = text.replace("Processors:\n", "Processors:\n  # first: XML to JSON\n  # (stateless)\n", 1)
+    again = graph_to_manifest(manifest_to_graph(text))
+    assert "  # where packets come in\n  Input:\n" in again
+    assert "  # first: XML to JSON\n  # (stateless)\n  XmlToJson:\n" in again

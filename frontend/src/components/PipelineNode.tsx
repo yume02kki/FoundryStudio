@@ -3,7 +3,7 @@ import { memo } from "react";
 import { checkConnection, datasetSchema, emits, expects, schemaList } from "../lib/rules";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, updateFor, versionFor } from "../lib/versions";
-import { inputHandle, isFlink, issuesFor, useStudio, type PNode } from "../store";
+import { inputHandle, isFlink, isUnion, issuesFor, useStudio, type PNode } from "../store";
 import { datasetName } from "../types";
 import { NodeActivity } from "./LiveData";
 
@@ -130,6 +130,30 @@ function FlinkInputs({ id }: { id: string }) {
   );
 }
 
+/**
+ * A dataset carrying several schemas: one socket per processor writing it, colored by what that processor writes,
+ * plus a spare one for another writer (its tooltip lists the carried schemas nobody writes yet).
+ */
+function UnionInputs({ id }: { id: string }) {
+  const edges = useStudio((s) => s.edges);
+  const nodes = useStudio((s) => s.nodes);
+  const processors = useStudio((s) => s.processors);
+  const node = (n: string) => nodes.find((x) => x.id === n)?.data.spec;
+  const writers = [...new Set(edges.filter((e) => e.target === id).map((e) => e.source))].sort();
+  const written = new Set(writers.map((w) => emits(node(w), processors)));
+  const unwritten = (schemaList(datasetSchema(node(id))) ?? []).filter((s) => !written.has(s));
+  return (
+    <div className="port-ins">
+      {writers.map((w) => {
+        const schema = emits(node(w), processors);
+        return <Port key={w} nodeId={id} port="in" handle={inputHandle(w)} testId={`port-${id}-in-${w}`} schema={schema}
+          label={false} title={`${w} writes ${schema ?? "?"}`} connectable={false} />;
+      })}
+      <Port nodeId={id} port="in" label={false} title={unwritten.length ? `Wire a writer of ${unwritten.join(" or ")}` : "Wire another writer"} />
+    </div>
+  );
+}
+
 /** One of the pipeline's DataSets (a Kafka topic): processors write into its left side and read from its right. */
 function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
   const name = data.spec.dataset ?? id;
@@ -147,7 +171,7 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
       style={{ borderLeftColor: color }}
       title={errors.map((e) => e.message).join("\n") || (spec?.Topic ? `Topic ${spec.Topic}` : undefined)}
     >
-      <Port nodeId={id} port="in" schema={schema} label={false} />
+      {isUnion(data.spec) ? <UnionInputs id={id} /> : <Port nodeId={id} port="in" schema={schema} label={false} />}
       <div className="dataset-body">
         <div className="pnode-head">
           <span className="pnode-kind">≋ Dataset</span>

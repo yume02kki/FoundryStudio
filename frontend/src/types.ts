@@ -37,6 +37,7 @@ export interface GraphNode {
   processor?: Processorspec;
   dataset?: string; // its key under DataSets, for a dataset node
   datasetSpec?: DatasetSpec | null; // null: used by a processor but not defined under DataSets
+  comments?: string[]; // the "# ..." lines above its entry in the manifest, written back on save
 }
 
 export interface GraphEdge {

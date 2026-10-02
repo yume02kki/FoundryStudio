@@ -52,11 +52,14 @@ function toPNode(spec: GraphNode, position: { x: number; y: number }): PNode {
 
 /** A flink processor reads several datasets: each wire into it gets its own input socket, in:<dataset node>. */
 export const isFlink = (spec: GraphNode | undefined) => spec?.kind === "processor" && spec.processor?.Runtime === "flink";
+/** A dataset carrying several schemas has several writers: each wire into it gets its own socket, in:<processor>. */
+export const isUnion = (spec: GraphNode | undefined) => spec?.kind === "dataset" && Array.isArray(spec.datasetSpec?.DataSchema);
 export const inputHandle = (source: string) => `in:${source}`;
 
 function toPEdge(source: string, target: string, nodes: PNode[]): PEdge {
-  const flink = isFlink(nodes.find((n) => n.id === target)?.data.spec);
-  return { id: edgeId(source, target), source, target, sourceHandle: "out", targetHandle: flink ? inputHandle(source) : "in", type: "topic" };
+  const spec = nodes.find((n) => n.id === target)?.data.spec;
+  const own = isFlink(spec) || isUnion(spec);
+  return { id: edgeId(source, target), source, target, sourceHandle: "out", targetHandle: own ? inputHandle(source) : "in", type: "topic" };
 }
 
 interface State {

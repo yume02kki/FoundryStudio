@@ -14,6 +14,7 @@ hand yields the same bytes no matter in which order things were dragged and wire
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import yaml
@@ -72,6 +73,11 @@ def _value_lines(key: str, value: Any, indent: int) -> list[str]:
     return [f"{pad}{_key(key)}: {_scalar(value)}"]
 
 
+def _comment_lines(node: dict) -> list[str]:
+    """An entry's own comments (kept from the manifest it was loaded from), at entry indent."""
+    return [f"  {c}" for c in node.get("comments") or [] if isinstance(c, str) and c.startswith("#")]
+
+
 def _ordered(d: dict, known: tuple[str, ...]) -> dict:
     d = {k: v for k, v in (d or {}).items() if not _blank(v)}
     return {**{k: d[k] for k in known if k in d}, **{k: v for k, v in d.items() if k not in known}}
@@ -81,6 +87,27 @@ def _ordered(d: dict, known: tuple[str, ...]) -> dict:
 # manifest -> graph
 # --------------------------------------------------------------------------- #
 
+_SECTION_RE = re.compile(r"^([A-Za-z]\w*):\s*(#.*)?$")
+_ENTRY_RE = re.compile(r"""^  (?:"([^"]+)"|'([^']+)'|([^\s#'"][^:#]*?)):(?:\s|$)""")
+
+
+def _entry_comments(text: str) -> dict[tuple[str, str], list[str]]:
+    """The comment lines right above each DataSets/Processors entry, as written, so a save keeps them."""
+    out: dict[tuple[str, str], list[str]] = {}
+    section, pending = None, []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            pending.append(stripped)
+            continue
+        if (m := _SECTION_RE.match(line)) and not line.startswith(" "):
+            section = m.group(1)
+        elif section in ("DataSets", "Processors") and (m := _ENTRY_RE.match(line)) and pending:
+            out[(section, next(g for g in m.groups() if g is not None).strip())] = pending
+        pending = []  # a blank line or anything else ends a comment block
+    return out
+
+
 def manifest_to_graph(text: str) -> dict:
     raw = yaml.safe_load(text) or {}
     if not isinstance(raw, dict):
@@ -89,8 +116,10 @@ def manifest_to_graph(text: str) -> dict:
     edges: list[dict] = []
     warnings: list[str] = []
     datasets = raw.get("DataSets") if isinstance(raw.get("DataSets"), dict) else {}
+    comments = _entry_comments(text)
     for name, spec in datasets.items():
         nodes.append({"id": dataset_node(str(name)), "kind": "dataset", "dataset": str(name),
+                      **({"comments": comments[("DataSets", str(name))]} if ("DataSets", str(name)) in comments else {}),
                       "datasetSpec": dict(spec) if isinstance(spec, dict) else {}})
 
     processors = raw.get("Processors") if isinstance(raw.get("Processors"), dict) else {}
@@ -98,7 +127,8 @@ def manifest_to_graph(text: str) -> dict:
         spec = dict(spec) if isinstance(spec, dict) else {}
         ins, out = spec.pop("In", None), spec.pop("Out", None)
         ins = ins if isinstance(ins, list) else [ins]  # flink processors may read several datasets
-        nodes.append({"id": str(name), "kind": "processor", "processor": spec})
+        nodes.append({"id": str(name), "kind": "processor", "processor": spec,
+                      **({"comments": comments[("Processors", str(name))]} if ("Processors", str(name)) in comments else {})})
         for ds, edge in [*((i, {"source": dataset_node(str(i)), "target": str(name)}) for i in ins),
                          (out, {"source": str(name), "target": dataset_node(str(out))})]:
             if ds is None:
@@ -190,7 +220,8 @@ def graph_to_manifest(graph: dict) -> str:
         if isinstance(spec.get("ConnectionSettings"), dict):
             spec["ConnectionSettings"] = _ordered(spec["ConnectionSettings"], CONNECTION_KEYS)
         spec = _ordered(spec, DATASET_KEYS)
-        entries.append(_value_lines(d, spec, 2) if spec else [f"  {_key(d)}: {{}}"])
+        node = nodes.get(dataset_node(d)) or {}
+        entries.append(_comment_lines(node) + (_value_lines(d, spec, 2) if spec else [f"  {_key(d)}: {{}}"]))
     if entries:
         lines = [DATASETS_COMMENT, "DataSets:"]
         for j, entry in enumerate(entries):
@@ -209,7 +240,7 @@ def graph_to_manifest(graph: dict) -> str:
             many = spec.get("Runtime") == "flink" and len(ins) > 1
             spec.update(In=ins if many else ins[0] if ins else None, Out=outs[0] if outs else None)
             spec = _ordered(spec, PROCESSOR_KEYS)
-            lines += ([""] if j else []) + (_value_lines(t, spec, 2) if spec else [f"  {_key(t)}: {{}}"])
+            lines += ([""] if j else []) + _comment_lines(nodes[t]) + (_value_lines(t, spec, 2) if spec else [f"  {_key(t)}: {{}}"])
         sections.append(lines)
 
     for k, v in (graph.get("extra") or {}).items():
