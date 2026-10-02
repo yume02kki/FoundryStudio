@@ -331,7 +331,7 @@ function DatasetInspector({ node }: { node: GraphNode }) {
       <Field label="Profile" hint="Config: a connection profile from the configs repo">
         <Select value={spec?.Config} options={profiles} onChange={(v) => set({ Config: v })} testId="dataset-profile" />
       </Field>
-      <Field label="Schema" hint="DataSchema: a schema in foundry-models">
+      <Field label="Schema" hint="DataSchema: a schema in the configs repo's schemas/">
         <Select value={spec?.DataSchema} options={schemas} onChange={(v) => set({ DataSchema: v })} testId="dataset-schema" />
       </Field>
       {info && (
@@ -461,7 +461,7 @@ function PipelineInspector() {
         </button>
       </p>
       <p className="note">
-        Schemas from {health?.modelsProject ?? "foundry-models"}: {Object.keys(catalog?.schemas ?? {}).join(", ") || "none"}.
+        Schemas from {health?.schemasRepo ?? "configs"}: {Object.keys(catalog?.schemas ?? {}).join(", ") || "none"}.
       </p>
       <p className="note">Select a node or an edge to inspect it.</p>
     </>

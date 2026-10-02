@@ -62,8 +62,7 @@ class Services:
         self.workspace = workspace or settings.workspace or REPO_ROOT / "workspace"
         self.validator = Validator(foundry)
         self.pipelines = PipelineStore(self.workspace)
-        self.sources = Sources(gitlab, settings.gitlab_url, foundry.manifest, settings.configs_repo,
-                               settings.models_project)
+        self.sources = Sources(gitlab, settings.gitlab_url, foundry.manifest, settings.configs_repo)
         self.discovery = Discovery(gitlab, lambda: self.sources.schema_names)
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.transformer_projects,
@@ -147,7 +146,7 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
         try:
             await svc.sources.schemas()  # before discovery, so it can flag unknown schemas
         except SourceError as e:
-            log.warning("can't read the schemas from %s: %s", svc.settings.models_project, e)
+            log.warning("can't read the schemas from %s: %s", svc.settings.configs_repo, e)
         if start_watcher:
             await svc.watcher.start()
         yield
@@ -174,7 +173,7 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             "scriptsCommit": s.foundry.commit,
             "workspace": str(s.workspace),
             "configsRepo": s.settings.configs_repo,
-            "modelsProject": s.settings.models_project,
+            "schemasRepo": s.settings.configs_repo,
             "transformerProjects": s.watcher.projects_with_transformers,
             "watcher": s.watcher.status(),
         }

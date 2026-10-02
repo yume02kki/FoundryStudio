@@ -61,7 +61,7 @@ async def test_folders_with_transformer_yaml_in_a_monorepo(demo_root, fake):
     found = await discovery(fake).scan_project("team-b/enrichers")
     assert set(found) == {"team-b/enrichers:GeoTag", "team-b/enrichers:Shout"}
     assert found["team-b/enrichers:GeoTag"].latest == "GeoTag/v0.1.0"
-    assert found["team-b/enrichers:Shout"].warnings == ["transformer.yaml out: 'Bogus' is not a schema in foundry-models"]
+    assert found["team-b/enrichers:Shout"].warnings == ["transformer.yaml out: 'Bogus' is not a schema in configs"]
 
     before = found["team-b/enrichers:GeoTag"].head
     commit(repo, {"Shout/README.md": "only Shout changes\n"}, "touch Shout")

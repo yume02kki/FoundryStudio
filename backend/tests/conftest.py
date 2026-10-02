@@ -30,7 +30,7 @@ def foundry() -> Foundry:
 
 @pytest.fixture
 def demo_root(tmp_path: Path, monkeypatch) -> Path:
-    """Local stand-ins for configs, foundry-models and the transformer repos, and a workspace."""
+    """Local stand-ins for configs and the transformer repos, and a workspace."""
     root = demo.init(tmp_path / "gitlab")
     env = dict(os.environ)
     gitenv.configure(env, gitlab_url="https://gitlab.com", fake_root=root,

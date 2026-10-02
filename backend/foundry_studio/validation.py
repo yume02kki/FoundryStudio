@@ -1,8 +1,8 @@
 """Validation passthrough: every rule and every message comes from manifest.py's check().
 
 The graph is written to a manifest exactly as Save would write it and handed to check(),
-with the configs repo's profiles staged in a temporary checkout, foundry-models' schema
-names, and each transform's in/out schemas from its discovered transformer.yaml at its Ref.
+with the configs repo's profiles staged in a temporary checkout, its schema names, and each
+transform's in/out schemas from its discovered transformer.yaml at its Ref.
 Errors are only *located* here (attached to the node or edge they name), never produced;
 the one rule added is the canvas's own: a transform has a single In and a single Out.
 """

@@ -2,8 +2,8 @@
 
 * connection profiles, `<kind>/<name>.yaml` in the configs repo the manifest names
   (`Configs: {Repo, Ref}`), e.g. kafka/prod;
-* schemas, `schemas/*.yaml` in foundry-models, named as its generator names the types
-  (xml_packets.yaml -> XmlPackets).
+* schemas, `schemas/*.yaml` in the configs repo, named as foundry-models' generator names the
+  types (xml_packets.yaml -> XmlPackets).
 
 Both are cached for a few seconds, so validating on every edit doesn't hit GitLab each time,
 and a failed refresh keeps serving the last good copy. Studio never writes to either repo.
@@ -28,12 +28,11 @@ class SourceError(Exception):
 
 class Sources:
     def __init__(self, gitlab: GitLab, gitlab_url: str, manifest: ModuleType, configs_repo: str,
-                 models_project: str, ttl: float = 30.0):
+                 ttl: float = 30.0):
         self.gitlab = gitlab
         self.gitlab_url = gitlab_url.rstrip("/")
         self.m = manifest
         self.configs_repo = configs_repo
-        self.models_project = models_project
         self.ttl = ttl
         self._cache: dict[tuple, tuple[float, dict]] = {}
         self._locks: dict[tuple, asyncio.Lock] = {}
@@ -96,11 +95,12 @@ class Sources:
         return await self._cached(("configs", repo, ref), load)
 
     async def schemas(self) -> dict:
-        """{name: {file, format, fields, data}} from foundry-models' default branch."""
+        """{name: {file, format, fields, data}} from the configs repo's default branch."""
         async def load():
-            project = await self.gitlab.get_project(self.models_project)
+            name = self.project_of(self.configs_repo)
+            project = await self.gitlab.get_project(name)
             _, files = await self._files(
-                self.models_project, project["default_branch"],
+                name, project["default_branch"],
                 lambda p: posixpath.dirname(p) == self.m.SCHEMA_DIR and p.endswith(".yaml"))
             out = {}
             for path, data in sorted(files.items()):

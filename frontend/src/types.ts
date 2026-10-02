@@ -59,7 +59,7 @@ export interface SchemaInfo {
   fields: Record<string, string>;
 }
 
-/** What manifests refer to (read-only): connection profiles from the configs repo, schemas from foundry-models. */
+/** What manifests refer to (read-only): connection profiles from the configs repo, schemas from the configs repo too. */
 export interface Catalog {
   profiles: Record<string, ConnectionSettings>; // "kafka/prod" -> its ConnectionSettings
   schemas: Record<string, SchemaInfo>;
@@ -138,7 +138,7 @@ export interface Health {
   scriptsCommit: string | null;
   workspace: string;
   configsRepo: string;
-  modelsProject: string;
+  schemasRepo: string;
   transformerProjects: string[];
   watcher: WatcherStatus;
 }

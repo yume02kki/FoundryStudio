@@ -12,7 +12,7 @@ from foundry_studio.sources import SourceError, Sources
 
 def sources(fake, foundry, ttl=30.0) -> Sources:
     return Sources(fake, "https://gitlab.com", foundry.manifest, "https://gitlab.com/foundry-common/configs.git",
-                   demo.MODELS, ttl=ttl)
+                   ttl=ttl)
 
 
 @pytest.mark.anyio

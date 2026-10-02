@@ -25,7 +25,7 @@ from foundry_studio.peek import (
 
 
 def schema(file: str) -> bytes:
-    """A schema file as foundry-models has it (the demo's copy)."""
+    """A schema file as configs has it (the demo's copy)."""
     return demo.SCHEMAS[f"schemas/{file}"].encode()
 
 PACKET = {"guid": "3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17", "data": "Hello, world!", "time_sent": "2026-10-01T14:32:05.123Z",

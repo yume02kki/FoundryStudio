@@ -28,10 +28,9 @@ class Settings:
     # The pipelines Studio edits: <workspace>/<folder>/PipelineManifest.yaml, one folder (a
     # pipeline repo checkout, ideally) per pipeline. None: <repo>/workspace (or the demo's).
     workspace: Path | None = None
-    # Connection profiles (kafka/<name>.yaml) for manifests without Configs.Repo, and new ones.
+    # Connection profiles (kafka/<name>.yaml) and schemas (schemas/*.yaml) for manifests without
+    # Configs.Repo, and new ones; the schemas here are also what transformer.yaml files are checked against.
     configs_repo: str = "https://gitlab.com/foundry-common/configs.git"
-    # The schemas (schemas/*.yaml) DataSchema names refer to.
-    models_project: str = "foundry-common/foundry-models"
     # "demo" or a directory: serve GitLab from local git repos instead of gitlab.com.
     fake_gitlab: str | None = None
     # Kafka credentials for the live feed, laid out like the transformer runtime's:
@@ -64,7 +63,6 @@ class Settings:
         if env.get("STUDIO_WORKSPACE"):
             s.workspace = Path(env["STUDIO_WORKSPACE"]).expanduser().resolve()
         s.configs_repo = env.get("STUDIO_CONFIGS_REPO", s.configs_repo)
-        s.models_project = env.get("STUDIO_MODELS_PROJECT", s.models_project)
         s.fake_gitlab = env.get("STUDIO_FAKE_GITLAB") or None
         if env.get("FOUNDRY_SECRETS_DIR"):
             s.secrets_dir = Path(env["FOUNDRY_SECRETS_DIR"]).expanduser().resolve()

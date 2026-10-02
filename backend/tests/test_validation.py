@@ -113,7 +113,7 @@ def test_cli_agrees(client, demo_root, tmp_path):
     manifest.write_text(graph_to_manifest(g))
     cli = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "manifest" / "manifest.py"), "validate", str(manifest),
-         "--configs", str(demo_root / demo.CONFIGS), "--models", str(demo_root / demo.MODELS)],
+         "--configs", str(demo_root / demo.CONFIGS)],
         capture_output=True, text=True)
     assert cli.returncode == 1
     cli_errors = sorted(line.removeprefix("error: ") for line in cli.stderr.splitlines())

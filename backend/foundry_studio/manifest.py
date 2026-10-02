@@ -28,8 +28,7 @@ TOP_LEVEL = ("Name", "Configs", "DataSets", "Transforms")
 HEADER = ("# yaml-language-server: $schema=https://gitlab.com/foundry-common/scripts/-/jobs/artifacts/main/raw/"
           "manifest.schema.json?job=schema")
 REF_COMMENT = "  # Ref: v1   # optional, defaults to main"
-DATASETS_COMMENT = ("# DataSchema names a schema in https://gitlab.com/foundry-common/foundry-models "
-                    "(Foundry.Models package).")
+DATASETS_COMMENT = "# DataSchema names a schema in the Configs repo\'s schemas/ (types in the Foundry.Models package)."
 
 
 # --------------------------------------------------------------------------- #

@@ -19,7 +19,7 @@ DataSets:
   Input:
     Type: Kafka
     Config: kafka/prod          # a profile from the configs repo
-    DataSchema: XmlPackets      # a schema in foundry-models
+    DataSchema: XmlPackets      # a schema in the configs repo's schemas/
     Topic: raw.xml
 Transforms:
   XmlToJson:
@@ -33,7 +33,7 @@ What a manifest refers to is read through the GitLab API, read-only:
 | | From | Used for |
 |---|---|---|
 | Connection profiles | the manifest's `Configs.Repo` at `Configs.Ref` | the Profile picker, validation, Live data |
-| Schemas | [foundry-models](https://gitlab.com/foundry-common/foundry-models) `schemas/*.yaml` | the Schema picker and field list, validation, Live data's checks |
+| Schemas | the default configs repo's (`STUDIO_CONFIGS_REPO`) `schemas/*.yaml` | the Schema picker and field list, validation, Live data's checks |
 | Transform schemas | each transformer's `transformer.yaml` at the transform's `Ref` | port colours, wiring rules, validation |
 
 Nothing here creates topics or edits profiles or schemas.
@@ -58,7 +58,7 @@ Open <http://127.0.0.1:5173>. Without a token, set `STUDIO_TRANSFORMER_PROJECTS`
 make demo
 ```
 
-The demo serves local git repos standing in for `foundry-common/configs`, `foundry-common/foundry-models` and the three `foundry-enrichers` transformers, and a workspace with PacketPipeline. Live data shows generated records, labelled **demo data**. To see live updates, "push" from another terminal:
+The demo serves local git repos standing in for `foundry-common/configs` and the three `foundry-enrichers` transformers, and a workspace with PacketPipeline. Live data shows generated records, labelled **demo data**. To see live updates, "push" from another terminal:
 
 ```sh
 cd backend
@@ -115,8 +115,7 @@ A transformer's versions are its `v*` tags (`<Path>/v*` in a folder), newest sem
 | `GITLAB_URL` | `https://gitlab.com` | Self-hosted GitLab works too |
 | `STUDIO_TRANSFORMER_PROJECTS` | every project you're a member of | Or a comma-separated list of projects |
 | `STUDIO_WORKSPACE` | `./workspace` | The pipeline folders Studio edits |
-| `STUDIO_CONFIGS_REPO` | `https://gitlab.com/foundry-common/configs.git` | Profiles for manifests without `Configs.Repo`, and new pipelines |
-| `STUDIO_MODELS_PROJECT` | `foundry-common/foundry-models` | Where the schemas are |
+| `STUDIO_CONFIGS_REPO` | `https://gitlab.com/foundry-common/configs.git` | Profiles for manifests without `Configs.Repo`, and new pipelines; schemas |
 | `STUDIO_POLL_INTERVAL` | `10` | Seconds between polls |
 | `STUDIO_FULL_RESCAN_INTERVAL` | `300` | Full rescan of every project even without events |
 | `GITLAB_WEBHOOK_SECRET` | – | Enables `/api/webhooks/gitlab` |

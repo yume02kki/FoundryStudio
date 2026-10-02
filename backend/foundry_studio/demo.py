@@ -5,8 +5,8 @@
     python -m foundry_studio.demo add Deduplicate Packets Packets "Drops repeated guids"
     python -m foundry_studio.demo remove Deduplicate
 
-The repos mirror the real ones: foundry-common/configs (connection profiles),
-foundry-common/foundry-models (schemas) and one foundry-enrichers project per transformer,
+The repos mirror the real ones: foundry-common/configs (connection profiles and schemas)
+and one foundry-enrichers project per transformer,
 each with a transformer.yaml at its root. The workspace holds PacketPipeline. Nothing here
 needs a token, Docker or Kafka; Live data shows generated records.
 """
@@ -24,7 +24,6 @@ from .config import REPO_ROOT
 
 DEFAULT_ROOT = REPO_ROOT / ".demo-gitlab"
 CONFIGS = "foundry-common/configs"
-MODELS = "foundry-common/foundry-models"
 ENRICHERS = "foundry-enrichers"
 
 # Fixed dates keep commit SHAs identical across `init` runs.
@@ -55,7 +54,7 @@ Configs:
   Repo: https://gitlab.com/{CONFIGS}.git
   # Ref: v1   # optional, defaults to main
 
-# DataSchema names a schema in https://gitlab.com/foundry-common/foundry-models (Foundry.Models package).
+# DataSchema names a schema in the Configs repo's schemas/ (types in the Foundry.Models package).
 DataSets:
   Input:
     Type: Kafka
@@ -140,8 +139,7 @@ def _repo(root: Path, project: str, files: dict[str, str], message: str, tag: st
 def init(root: Path = DEFAULT_ROOT) -> Path:
     if root.exists():
         shutil.rmtree(root)
-    _repo(root, CONFIGS, PROFILES, "Kafka connection profiles")
-    _repo(root, MODELS, SCHEMAS, "Packet schemas")
+    _repo(root, CONFIGS, {**PROFILES, **SCHEMAS}, "Kafka connection profiles and packet schemas")
     for project, (name, i, o, desc) in TRANSFORMERS.items():
         _repo(root, f"{ENRICHERS}/{project}", transformer_files(name, i, o, description=desc), f"{name} 1.0.0", "v1.0.0")
     # A plain folder (not a git repo), so the fake GitLab doesn't list it as a project.
