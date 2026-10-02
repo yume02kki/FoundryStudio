@@ -69,7 +69,7 @@ make demo-reset                                                       # start ov
 
 ## The workspace
 
-`STUDIO_WORKSPACE` holds one folder per pipeline, ideally a checkout of the pipeline's repo:
+`STUDIO_WORKSPACE` holds one folder per pipeline. Studio keeps it a checkout of the pipelines repo, [foundry-common/foundry-pipelines](https://gitlab.com/foundry-common/foundry-pipelines) (`STUDIO_PIPELINES_REPO`): it clones it into an empty workspace and fast-forwards it on every push, unless the workspace has changes not committed yet.
 
 ```
 <workspace>/<folder>/PipelineManifest.yaml          the pipeline
@@ -115,6 +115,7 @@ A transformer's versions are its `v*` tags (`<Path>/v*` in a folder), newest sem
 | `GITLAB_URL` | `https://gitlab.com` | Self-hosted GitLab works too |
 | `STUDIO_TRANSFORMER_PROJECTS` | every project you're a member of | Or a comma-separated list of projects |
 | `STUDIO_WORKSPACE` | `./workspace` | The pipeline folders Studio edits |
+| `STUDIO_PIPELINES_REPO` | `https://gitlab.com/foundry-common/foundry-pipelines.git` | The workspace is a checkout of it; empty: a plain folder (the default with `STUDIO_FAKE_GITLAB`) |
 | `STUDIO_CONFIGS_REPO` | `https://gitlab.com/foundry-common/configs.git` | Profiles for manifests without `Configs.Repo`, and new pipelines; schemas |
 | `STUDIO_POLL_INTERVAL` | `10` | Seconds between polls |
 | `STUDIO_FULL_RESCAN_INTERVAL` | `300` | Full rescan of every project even without events |

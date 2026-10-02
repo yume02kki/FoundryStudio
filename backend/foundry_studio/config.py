@@ -28,6 +28,9 @@ class Settings:
     # The pipelines Studio edits: <workspace>/<folder>/PipelineManifest.yaml, one folder (a
     # pipeline repo checkout, ideally) per pipeline. None: <repo>/workspace (or the demo's).
     workspace: Path | None = None
+    # The pipelines repo, one folder per pipeline; the workspace is kept a checkout of it. None: the
+    # workspace is a plain folder (the default with a fake GitLab).
+    pipelines_repo: str | None = "https://gitlab.com/foundry-common/foundry-pipelines.git"
     # Connection profiles (kafka/<name>.yaml) and schemas (schemas/*.yaml) for manifests without
     # Configs.Repo, and new ones; the schemas here are also what transformer.yaml files are checked against.
     configs_repo: str = "https://gitlab.com/foundry-common/configs.git"
@@ -64,6 +67,8 @@ class Settings:
             s.workspace = Path(env["STUDIO_WORKSPACE"]).expanduser().resolve()
         s.configs_repo = env.get("STUDIO_CONFIGS_REPO", s.configs_repo)
         s.fake_gitlab = env.get("STUDIO_FAKE_GITLAB") or None
+        if "STUDIO_PIPELINES_REPO" in env or s.fake_gitlab:
+            s.pipelines_repo = env.get("STUDIO_PIPELINES_REPO") or None
         if env.get("FOUNDRY_SECRETS_DIR"):
             s.secrets_dir = Path(env["FOUNDRY_SECRETS_DIR"]).expanduser().resolve()
         if env.get("STUDIO_KAFKA_CLUSTERS"):

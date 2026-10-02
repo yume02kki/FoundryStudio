@@ -3,8 +3,8 @@
 Which projects: every project the token's user is a member of (re-listed every
 `discovery_interval` seconds, so new projects show up on their own), or a fixed list
 (STUDIO_TRANSFORMER_PROJECTS). Any folder with a transformer.yaml in any of them is a
-transformer, and a PipelineManifest.yaml at a project's root makes it a pipeline, checked out
-into the workspace (PipelineSync).
+transformer. The pipelines repo (one folder per pipeline) is watched too, and the workspace,
+a checkout of it, follows its pushes (PipelineSync).
 
 Polling (every `poll_interval` seconds) reads each project's events API, plus
 `last_activity_at` (which GitLab only refreshes about once an hour, so it's a backstop,
@@ -62,6 +62,8 @@ class Watcher:
         self.bus = bus
         # None: every project the user is a member of.
         self.fixed_projects = list(transformer_projects) if transformer_projects else None
+        if self.fixed_projects is not None and pipelines and pipelines.project not in self.fixed_projects:
+            self.fixed_projects.append(pipelines.project)
         self.transformer_projects = list(self.fixed_projects or [])
         self.poll_interval = poll_interval
         self.full_rescan_interval = full_rescan_interval
@@ -126,6 +128,8 @@ class Watcher:
             return
         self._last_listing = time.monotonic()
         activity = {p["path_with_namespace"]: p.get("last_activity_at") or "" for p in listed}
+        if self.pipelines:
+            activity.setdefault(self.pipelines.project, "")
         new = [p for p in activity if p not in self.transformer_projects]
         changed = [p for p in activity if p in self.transformer_projects
                    and activity[p] != self._listed_activity.get(p)]
@@ -200,7 +204,7 @@ class Watcher:
         auto = self.fixed_projects is None
         if auto and (self._last_listing is None or time.monotonic() - self._last_listing >= self.discovery_interval):
             await self.refresh_projects()
-        with_transformers = set(self.projects_with_transformers) | set(self.discovery.pipeline_projects)
+        with_transformers = set(self.projects_with_transformers) | ({self.pipelines.project} if self.pipelines else set())
         for project in self.transformer_projects:
             async def check(project=project):
                 stale = time.monotonic() - self._last_full.get(project, 0) > self.full_rescan_interval
@@ -255,6 +259,5 @@ class Watcher:
             for tid in old.keys() - found.keys():
                 gone = self.transformers.pop(tid)
                 self.bus.publish({"type": "transformer.removed", "id": tid, "name": gone.name})
-        proj = self.discovery.pipeline_projects.get(project)
-        if proj and self.pipelines and await self.pipelines.sync(proj):
+        if self.pipelines and project == self.pipelines.project and await self.pipelines.sync():
             self.bus.publish({"type": "pipelines.changed", "project": project})

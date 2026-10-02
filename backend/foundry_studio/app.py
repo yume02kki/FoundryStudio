@@ -67,7 +67,9 @@ class Services:
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.transformer_projects,
                                settings.poll_interval, settings.full_rescan_interval,
-                               pipelines=PipelineSync(self.workspace))
+                               pipelines=PipelineSync(self.workspace, settings.pipelines_repo,
+                                                      self.sources.project_of(settings.pipelines_repo))
+                               if settings.pipelines_repo else None)
 
     async def context(self, graph: dict) -> dict:
         """What validating a graph needs besides the graph: profiles, schemas, transformer.yaml schemas."""

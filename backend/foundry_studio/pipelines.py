@@ -1,4 +1,4 @@
-"""The workspace: one folder per pipeline, ideally a checkout of the pipeline's repo.
+"""The workspace: one folder per pipeline, normally a checkout of the pipelines repo (PipelineSync).
 
     <workspace>/<folder>/PipelineManifest.yaml           the pipeline
     <workspace>/<folder>/PipelineManifest.layout.json    node positions (the sidecar)
@@ -97,45 +97,45 @@ class PipelineStore:
 
 
 class PipelineSync:
-    """Keeps a checkout in the workspace of every GitLab project with a PipelineManifest.yaml at
-    its root, in <workspace>/<project name>. A new one is cloned; on a push it's fast-forwarded,
-    unless Studio has unsaved-to-git changes there (a dirty tree), which are never overwritten.
-    Credentials come from the environment gitenv set up."""
+    """Keeps the workspace a checkout of the pipelines repo (one folder per pipeline): cloned into
+    an empty workspace, then fast-forwarded on every push, unless Studio has saved changes that
+    aren't committed yet (a dirty tree), which are never overwritten. Credentials come from the
+    environment gitenv set up."""
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, repo: str, project: str):
         self.workspace = workspace
+        self.repo = repo
+        self.project = project
         self.errors: dict[str, str] = {}
 
-    async def _git(self, *args: str, cwd: Path | None = None) -> str:
+    async def _git(self, *args: str) -> str:
         proc = await asyncio.create_subprocess_exec(
-            "git", *args, cwd=cwd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            "git", *args, cwd=self.workspace, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         out, err = await proc.communicate()
         if proc.returncode:
             raise PipelineError(502, f"git {args[0]}: {err.decode().strip() or proc.returncode}")
-        return out.decode()
+        return out.decode().strip()
 
-    async def sync(self, proj: dict) -> bool:
+    async def sync(self) -> bool:
         """Clone or fast-forward; True when the workspace changed."""
-        project, url, branch = proj["path_with_namespace"], proj["http_url_to_repo"], proj["default_branch"]
-        target = self.workspace / proj["path"]
         try:
-            if not target.exists():
+            if not (self.workspace / ".git").exists():
                 self.workspace.mkdir(parents=True, exist_ok=True)
-                await self._git("clone", "-q", "--branch", branch, url, str(target))
+                if any(self.workspace.iterdir()):
+                    raise PipelineError(409, f"{self.workspace} isn't empty and isn't a checkout of {self.repo}")
+                await self._git("clone", "-q", self.repo, ".")
                 changed = True
-            elif not (target / ".git").exists():
-                raise PipelineError(409, f"{target} exists and isn't a checkout of {project}")
-            elif (await self._git("remote", "get-url", "origin", cwd=target)).strip() != url:
-                raise PipelineError(409, f"{target} is a checkout of another repo, not {project}")
+            elif await self._git("remote", "get-url", "origin") != self.repo:
+                raise PipelineError(409, f"{self.workspace} is a checkout of another repo, not {self.repo}")
             else:
-                before = (await self._git("rev-parse", "HEAD", cwd=target)).strip()
-                await self._git("fetch", "-q", "origin", branch, cwd=target)
-                if (await self._git("status", "--porcelain", "--untracked-files=no", cwd=target)).strip():
-                    raise PipelineError(409, f"{target.name} has changes not in git; not updating it from {project}")
-                await self._git("merge", "-q", "--ff-only", "FETCH_HEAD", cwd=target)
-                changed = (await self._git("rev-parse", "HEAD", cwd=target)).strip() != before
+                before = await self._git("rev-parse", "HEAD")
+                await self._git("fetch", "-q", "origin")
+                if await self._git("status", "--porcelain", "--untracked-files=no"):
+                    raise PipelineError(409, f"the workspace has changes not in git; not updating it from {self.project}")
+                await self._git("merge", "-q", "--ff-only", "@{u}")
+                changed = await self._git("rev-parse", "HEAD") != before
         except PipelineError as e:
-            self.errors[project] = str(e)
+            self.errors[self.project] = str(e)
             return False
-        self.errors.pop(project, None)
+        self.errors.pop(self.project, None)
         return changed

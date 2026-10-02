@@ -17,7 +17,6 @@ import yaml
 from .gitlab import GitLab
 
 DECL_FILE = "transformer.yaml"
-PIPELINE_FILE = "PipelineManifest.yaml"
 _SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 
 
@@ -79,8 +78,6 @@ class Discovery:
         self.gitlab = gitlab
         self.known_schemas = known_schemas
         self._decl_cache: dict[tuple[str, str, str], Decl] = {}  # (project, commit, path) -> Decl
-        # Projects with a PipelineManifest.yaml at the root, as of their last scan: project -> GitLab project.
-        self.pipeline_projects: dict[str, dict] = {}
 
     def _schema(self, value, where: str, warnings: list[str]) -> str | None:
         if value is None:
@@ -126,16 +123,11 @@ class Discovery:
         branch = proj["default_branch"]
         head = await self.gitlab.get_commit(project, branch)
         if head is None:
-            self.pipeline_projects.pop(project, None)
             return {}
         tree = await self.gitlab.list_tree(project, head["id"], recursive=True)
         build_dirs = {"target", "bin", "obj", "node_modules", ".venv"}
         blobs = [e for e in tree if e["type"] == "blob" and not build_dirs & set(e["path"].split("/"))]
         folders = {posixpath.dirname(e["path"]) for e in blobs if posixpath.basename(e["path"]) == DECL_FILE}
-        if any(e["path"] == PIPELINE_FILE for e in blobs):
-            self.pipeline_projects[project] = proj
-        else:
-            self.pipeline_projects.pop(project, None)
         infos = await asyncio.gather(*(self._crate(proj, head, path) for path in sorted(folders)))
         return {i.id: i for i in infos}
 
