@@ -1613,6 +1613,7 @@ button.tab:hover:not(.active) {
   display: flex;
   align-items: stretch;
   background: #2f3438;
+  border-top: 3px solid #3a9b8a;
   border-radius: 18px;
 }
 
