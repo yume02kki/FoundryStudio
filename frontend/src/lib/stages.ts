@@ -1,4 +1,4 @@
-// Live data stages: what each node reads and writes, and pairing a transformer's input
+// Live data stages: what each node reads and writes, and pairing a processor's input
 // records with its output records. Feeds are keyed by dataset (topic) name.
 
 import { datasetName, isDatasetNode, type FeedMessage, type FeedState, type GraphEdge, type GraphNode } from "../types";
@@ -52,7 +52,7 @@ export function edgeDataset(source: string, target: string): string {
 export interface StageStats {
   inRate: number; // messages/min on what the stage reads (for a dataset: itself)
   outRate: number; // messages/min on what it writes
-  transformed: number;
+  processed: number;
   dropped: number;
   lastAt: number | null;
   tone: "success" | "warning" | "danger" | "muted";
@@ -67,7 +67,7 @@ export function stageStats(graph: GraphLike, stage: string, feeds: Record<string
   const out = outFeed ? feedHealth(outFeed, now) : null;
   if (isDatasetNode(stage)) {
     return {
-      inRate: out?.perMinute ?? 0, outRate: out?.perMinute ?? 0, transformed: 0, dropped: 0,
+      inRate: out?.perMinute ?? 0, outRate: out?.perMinute ?? 0, processed: 0, dropped: 0,
       lastAt: out?.lastAt ?? null, tone: out?.tone ?? "muted", label: out?.label ?? "Off",
     };
   }
@@ -76,7 +76,7 @@ export function stageStats(graph: GraphLike, stage: string, feeds: Record<string
   // Every output gets every record, so pair against the first one that's being watched.
   const pairs = pairRecords(inFeeds.flatMap((f) => f.messages), outFeed?.messages ?? [], now);
   const dropped = pairs.filter((p) => p.status === "dropped").length;
-  const transformed = pairs.filter((p) => p.status === "transformed").length;
+  const processed = pairs.filter((p) => p.status === "processed").length;
   const outRate = out?.perMinute ?? 0;
   const lastAt = out?.lastAt ?? null;
   const states = [...inFeeds, ...outFeeds].map((f) => f.state);
@@ -90,7 +90,7 @@ export function stageStats(graph: GraphLike, stage: string, feeds: Record<string
   else if (inRate > 0 && outRate === 0) tone = "danger"; // input arriving, nothing coming out
   else if (dropped > 0) tone = "warning";
   else if (outRate > 0) tone = "success";
-  return { inRate, outRate, transformed, dropped, lastAt, tone, label };
+  return { inRate, outRate, processed, dropped, lastAt, tone, label };
 }
 
 const JSON_ID = /"(?:guid|id|uuid)"\s*:\s*"([^"]+)"/;
@@ -103,7 +103,7 @@ export function recordId(m: FeedMessage): string | null {
   return JSON_ID.exec(v)?.[1] ?? XML_ID.exec(v)?.[1] ?? null;
 }
 
-export type PairStatus = "transformed" | "dropped" | "pending" | "out-only" | "unkeyed";
+export type PairStatus = "processed" | "dropped" | "pending" | "out-only" | "unkeyed";
 
 export interface Pair {
   id: string;
@@ -115,7 +115,7 @@ export interface Pair {
 
 /**
  * Pair input and output records by id. An input with no output after `dropAfterMs`
- * counts as dropped by the transformer; outputs whose input isn't in view are "out-only".
+ * counts as dropped by the processor; outputs whose input isn't in view are "out-only".
  */
 export function pairRecords(inputs: FeedMessage[], outputs: FeedMessage[], now: number, dropAfterMs = 5000): Pair[] {
   const outById = new Map<string, FeedMessage>();
@@ -134,7 +134,7 @@ export function pairRecords(inputs: FeedMessage[], outputs: FeedMessage[], now: 
     }
     const output = outById.get(id);
     if (output) used.add(id);
-    const status: PairStatus = output ? "transformed" : now - at > dropAfterMs ? "dropped" : "pending";
+    const status: PairStatus = output ? "processed" : now - at > dropAfterMs ? "dropped" : "pending";
     pairs.push({ id, input: i, output, status, at });
   });
   outputs.forEach((o, n) => {

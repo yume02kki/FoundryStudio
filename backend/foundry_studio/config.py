@@ -17,9 +17,9 @@ def _list(value: str) -> list[str]:
 @dataclass
 class Settings:
     gitlab_url: str = "https://gitlab.com"
-    # Projects scanned for transformers (folders with a transformer.yaml). None: every project
+    # Projects scanned for processors (folders with a processor.yaml). None: every project
     # the token's user is a member of, re-listed so new projects show up on their own.
-    transformer_projects: list[str] | None = None
+    processor_projects: list[str] | None = None
     poll_interval: float = 10.0
     # Full rescan even without events, to catch anything the events API missed.
     full_rescan_interval: float = 300.0
@@ -32,11 +32,11 @@ class Settings:
     # workspace is a plain folder (the default with a fake GitLab).
     pipelines_repo: str | None = "https://gitlab.com/foundry-platform/foundry-pipelines.git"
     # Connection profiles (kafka/<name>.yaml) and schemas (schemas/*.yaml) for manifests without
-    # Configs.Repo, and new ones; the schemas here are also what transformer.yaml files are checked against.
+    # Configs.Repo, and new ones; the schemas here are also what processor.yaml files are checked against.
     configs_repo: str = "https://gitlab.com/foundry-platform/common/configs.git"
     # "demo" or a directory: serve GitLab from local git repos instead of gitlab.com.
     fake_gitlab: str | None = None
-    # Kafka credentials for the live feed, laid out like the transformer runtime's:
+    # Kafka credentials for the live feed, laid out like the processor runtime's:
     # <secrets_dir>/<SecretRef>/username and /password.
     secrets_dir: Path = Path("/var/run/secrets/foundry")
     # Where the catalog's Brokers really are from this machine (for the live feed):
@@ -57,8 +57,8 @@ class Settings:
         s = cls()
         env = os.environ
         s.gitlab_url = env.get("GITLAB_URL", s.gitlab_url).rstrip("/")
-        if env.get("STUDIO_TRANSFORMER_PROJECTS", "*").strip() not in ("", "*"):
-            s.transformer_projects = _list(env["STUDIO_TRANSFORMER_PROJECTS"])
+        if env.get("STUDIO_PROCESSOR_PROJECTS", "*").strip() not in ("", "*"):
+            s.processor_projects = _list(env["STUDIO_PROCESSOR_PROJECTS"])
         s.poll_interval = float(env.get("STUDIO_POLL_INTERVAL", s.poll_interval))
         s.full_rescan_interval = float(env.get("STUDIO_FULL_RESCAN_INTERVAL", s.full_rescan_interval))
         if env.get("FOUNDRY_SCRIPTS_DIR"):

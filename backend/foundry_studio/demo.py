@@ -1,13 +1,13 @@
 """Offline demo: local stand-ins for the foundry repos on GitLab, and a workspace.
 
     python -m foundry_studio.demo init                          # (re)create the demo
-    python -m foundry_studio.demo tag decodingtransformer v1.1.0 # commit + tag, like a release push
+    python -m foundry_studio.demo tag decodingprocessor v1.1.0 # commit + tag, like a release push
     python -m foundry_studio.demo add Deduplicate Packets Packets "Drops repeated guids"
     python -m foundry_studio.demo remove Deduplicate
 
 The repos mirror the real ones: foundry-platform/common/configs (connection profiles and schemas)
-and one foundry-platform/enrichers project per transformer,
-each with a transformer.yaml at its root. The workspace holds PacketPipeline. Nothing here
+and one foundry-platform/enrichers project per processor,
+each with a processor.yaml at its root. The workspace holds PacketPipeline. Nothing here
 needs a token, Docker or Kafka; Live data shows generated records.
 """
 
@@ -41,9 +41,9 @@ SCHEMAS = {
     "schemas/packets.yaml": "format: json\nfields:\n" + _PACKET.format(data="string", extra=""),
     "schemas/enriched_packets.yaml": "format: json\nfields:\n" + _PACKET.format(data="string", extra="  ISP: string\n"),
 }
-TRANSFORMERS = {  # project -> (name, in, out, description)
-    "xmltojsontransformer": ("XmlToJson", "XmlPackets", "Packets", "Converts XML packets to JSON; data stays base64."),
-    "decodingtransformer": ("Decode", "Packets", "EnrichedPackets", "Decodes the base64 payload to text."),
+PROCESSORS = {  # project -> (name, in, out, description)
+    "xmltojsonprocessor": ("XmlToJson", "XmlPackets", "Packets", "Converts XML packets to JSON; data stays base64."),
+    "decodingprocessor": ("Decode", "Packets", "EnrichedPackets", "Decodes the base64 payload to text."),
     "IspEnricher": ("Isp", "Packets", "EnrichedPackets", "Adds the ISP of host_ip, from CIDR ranges in appsettings."),
 }
 MANIFEST = f"""\
@@ -74,14 +74,14 @@ DataSets:
     DataSchema: EnrichedPackets
     Topic: packets.enriched
 
-Transforms:
+Processors:
   XmlToJson:
-    Repo: https://gitlab.com/{ENRICHERS}/xmltojsontransformer.git
+    Repo: https://gitlab.com/{ENRICHERS}/xmltojsonprocessor.git
     In: Input
     Out: ConvertedPackets
 
   Decode:
-    Repo: https://gitlab.com/{ENRICHERS}/decodingtransformer.git
+    Repo: https://gitlab.com/{ENRICHERS}/decodingprocessor.git
     In: ConvertedPackets
     Out: Output
 
@@ -108,17 +108,17 @@ def _git(repo: Path, *args: str, date: str | None = None) -> str:
     return res.stdout.strip()
 
 
-def transformer_files(name: str, input: str, output: str, version: str = "1.0.0",
+def processor_files(name: str, input: str, output: str, version: str = "1.0.0",
                       description: str | None = None) -> dict[str, str]:
-    """A transformer repo in the shape of the real ones (minimal: no Kafka loop)."""
+    """A processor repo in the shape of the real ones (minimal: no Kafka loop)."""
     return {
-        "transformer.yaml": f"name: {name}\nin: {input}\nout: {output}\ndescription: {description or name}\n",
+        "processor.yaml": f"name: {name}\nin: {input}\nout: {output}\ndescription: {description or name}\n",
         f"{name}.csproj": (
             '<Project Sdk="Microsoft.NET.Sdk.Worker">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n'
             f"    <Version>{version}</Version>\n  </PropertyGroup>\n  <ItemGroup>\n"
-            '    <PackageReference Include="Foundry.Common.Transformers" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
+            '    <PackageReference Include="Foundry.Common.Processors" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
         "Program.cs": (f"using Foundry.Common.Models;\n\n// Demo stand-in: {input} -> {output}.\n"
-                       f"static {output} Transform({input} p) => new() {{ Guid = p.Guid }};\n"),
+                       f"static {output} Processor({input} p) => new() {{ Guid = p.Guid }};\n"),
     }
 
 
@@ -140,8 +140,8 @@ def init(root: Path = DEFAULT_ROOT) -> Path:
     if root.exists():
         shutil.rmtree(root)
     _repo(root, CONFIGS, {**PROFILES, **SCHEMAS}, "Kafka connection profiles and packet schemas")
-    for project, (name, i, o, desc) in TRANSFORMERS.items():
-        _repo(root, f"{ENRICHERS}/{project}", transformer_files(name, i, o, description=desc), f"{name} 1.0.0", "v1.0.0")
+    for project, (name, i, o, desc) in PROCESSORS.items():
+        _repo(root, f"{ENRICHERS}/{project}", processor_files(name, i, o, description=desc), f"{name} 1.0.0", "v1.0.0")
     # A plain folder (not a git repo), so the fake GitLab doesn't list it as a project.
     (workspace(root) / "PacketPipeline").mkdir(parents=True)
     (workspace(root) / "PacketPipeline" / "PipelineManifest.yaml").write_text(MANIFEST)
@@ -160,13 +160,13 @@ def tag(root: Path, project: str, version: str) -> str:
 
 
 def add(root: Path, name: str, input: str, output: str, description: str | None = None) -> None:
-    _repo(root, f"{ENRICHERS}/{name}", transformer_files(name, input, output, "0.1.0", description), f"Add {name}")
+    _repo(root, f"{ENRICHERS}/{name}", processor_files(name, input, output, "0.1.0", description), f"Add {name}")
 
 
 def remove(root: Path, name: str) -> None:
     repo = root / ENRICHERS / name
-    _git(repo, "rm", "-q", "transformer.yaml")
-    _git(repo, "commit", "-q", "-m", f"{name} is no longer a transformer")
+    _git(repo, "rm", "-q", "processor.yaml")
+    _git(repo, "commit", "-q", "-m", f"{name} is no longer a processor")
 
 
 def main(argv=None) -> None:

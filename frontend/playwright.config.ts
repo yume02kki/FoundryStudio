@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // The e2e suite runs against the offline demo: local git repos standing in for configs,
-// the transformer repos, and a workspace with PacketPipeline
+// the processor repos, and a workspace with PacketPipeline
 // (see backend/foundry_studio/demo.py). No token needed.
 const BACKEND_PORT = 8100;
 const FRONTEND_PORT = 5199;

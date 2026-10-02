@@ -20,7 +20,7 @@ from .conftest import SCRIPTS_DIR
 @pytest.fixture
 def client(services):
     with TestClient(create_app(services)) as c:
-        c.get("/api/transformers")  # waits for discovery
+        c.get("/api/processors")  # waits for discovery
         yield c
 
 
@@ -39,7 +39,7 @@ def validate(client, g) -> list[dict]:
 def test_demo_pipeline_is_valid(client):
     r = client.post("/api/validate", json={"graph": graph()}).json()
     assert r["ok"] and r["errors"] == []
-    assert r["summary"] == "3 transforms, 3 datasets"
+    assert r["summary"] == "3 processors, 3 datasets"
     assert (r["sources"], r["sinks"]) == (["Input"], ["Output"])
     assert r["manifest"] == demo.MANIFEST
 
@@ -61,24 +61,24 @@ def test_schema_mismatch_lands_on_the_edge(client):
     g = graph()
     g["edges"] = [e for e in g["edges"] if e["target"] != "Decode"] + [{"source": "dataset:Input", "target": "Decode"}]
     [e] = validate(client, g)
-    assert e["message"] == "Transforms.Decode.In: Input carries XmlPackets but Decode reads Packets"
+    assert e["message"] == "Processors.Decode.In: Input carries XmlPackets but Decode reads Packets"
     assert e["edge"] == ["dataset:Input", "Decode"]
 
 
-def test_pinned_ref_uses_that_versions_transformer_yaml(client, demo_root):
+def test_pinned_ref_uses_that_versions_processor_yaml(client, demo_root):
     # A new release of Decode that reads XmlPackets: pinning it makes the existing wire wrong.
-    repo = demo_root / demo.ENRICHERS / "decodingtransformer"
-    (repo / "transformer.yaml").write_text("name: Decode\nin: XmlPackets\nout: EnrichedPackets\n")
-    demo.tag(demo_root, "decodingtransformer", "v2.0.0")
+    repo = demo_root / demo.ENRICHERS / "decodingprocessor"
+    (repo / "processor.yaml").write_text("name: Decode\nin: XmlPackets\nout: EnrichedPackets\n")
+    demo.tag(demo_root, "decodingprocessor", "v2.0.0")
     client.app.state.services.watcher.full_rescan_interval = 0
     client.portal.call(client.app.state.services.watcher.poll_once)
     g = graph()
-    next(n for n in g["nodes"] if n["id"] == "Decode")["transformer"]["Ref"] = "v2.0.0"
+    next(n for n in g["nodes"] if n["id"] == "Decode")["processor"]["Ref"] = "v2.0.0"
     [e] = validate(client, g)
-    assert e["message"] == "Transforms.Decode.In: ConvertedPackets carries Packets but Decode reads XmlPackets"
-    del next(n for n in g["nodes"] if n["id"] == "Decode")["transformer"]["Ref"]
-    assert validate(client, g)  # the default branch has the new transformer.yaml too
-    next(n for n in g["nodes"] if n["id"] == "Decode")["transformer"]["Ref"] = "v1.0.0"
+    assert e["message"] == "Processors.Decode.In: ConvertedPackets carries Packets but Decode reads XmlPackets"
+    del next(n for n in g["nodes"] if n["id"] == "Decode")["processor"]["Ref"]
+    assert validate(client, g)  # the default branch has the new processor.yaml too
+    next(n for n in g["nodes"] if n["id"] == "Decode")["processor"]["Ref"] = "v1.0.0"
     assert validate(client, g) == []
 
 
@@ -86,19 +86,19 @@ def test_second_input_is_reported(client):
     g = graph()
     g["edges"].append({"source": "dataset:Input", "target": "Isp"})
     messages = [e["message"] for e in validate(client, g)]
-    assert "Transforms.Isp.In: Isp reads ConvertedPackets and Input; a transform reads one dataset" in messages
+    assert "Processors.Isp.In: Isp reads ConvertedPackets and Input; a processor reads one dataset" in messages
 
 
 def test_check_edge(client):
     g = graph()
     check = lambda s, t, gr=g: client.post("/api/check-edge", json={"graph": gr, "source": s, "target": t}).json()  # noqa: E731
-    assert check("Decode", "Isp")["message"].endswith("transforms connect through a dataset; drop a dataset between them")
-    assert check("dataset:Input", "dataset:Output")["message"] == "datasets connect through a transform"
+    assert check("Decode", "Isp")["message"].endswith("processors connect through a dataset; drop a dataset between them")
+    assert check("dataset:Input", "dataset:Output")["message"] == "datasets connect through a processor"
     assert check("dataset:Input", "Isp")["message"] == (
-        "Transforms.Isp.In: Isp already reads ConvertedPackets; a transform reads one dataset")
+        "Processors.Isp.In: Isp already reads ConvertedPackets; a processor reads one dataset")
     unwired = {**g, "edges": [e for e in g["edges"] if e["target"] != "Isp"]}
     assert check("dataset:Input", "Isp", unwired)["message"] == (
-        "Transforms.Isp.In: Input carries XmlPackets but Isp reads Packets")
+        "Processors.Isp.In: Input carries XmlPackets but Isp reads Packets")
     assert check("dataset:ConvertedPackets", "Isp", unwired) == {"ok": True, "message": None}
     # Isp reading Output (which it writes) would be a self loop.
     assert "reads and writes Output" in check("dataset:Output", "Isp", unwired)["message"]
@@ -121,9 +121,9 @@ def test_cli_agrees(client, demo_root, tmp_path):
 
 
 @pytest.mark.parametrize("message, node, edge", [
-    ("Transforms.A.In: no dataset 'X'", None, ["dataset:X", "A"]),
-    ("Transforms.A.Out: A writes P but Y carries Q", None, ["A", "dataset:Y"]),
-    ("Transforms.A: missing Repo", "A", None),
+    ("Processors.A.In: no dataset 'X'", None, ["dataset:X", "A"]),
+    ("Processors.A.Out: A writes P but Y carries Q", None, ["A", "dataset:Y"]),
+    ("Processors.A: missing Repo", "A", None),
     ("DataSets.My.Set.DataSchema: unknown schema 'Q' (known: P)", "dataset:My.Set", None),
     ("Name: required", None, None),
 ])
@@ -133,4 +133,4 @@ def test_locate(message, node, edge):
 
 
 def test_locate_cycle():
-    assert locate("Transforms: cycle among A, B")["nodes"] == ["A", "B"]
+    assert locate("Processors: cycle among A, B")["nodes"] == ["A", "B"]

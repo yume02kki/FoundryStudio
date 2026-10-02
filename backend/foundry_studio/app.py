@@ -42,7 +42,7 @@ class SaveBody(BaseModel):
 
 class PeekBody(BaseModel):
     graph: dict
-    node: str  # a dataset node, or a transform (the dataset it writes)
+    node: str  # a dataset node, or a processor (the dataset it writes)
 
 
 class EdgeBody(BaseModel):
@@ -65,17 +65,17 @@ class Services:
         self.sources = Sources(gitlab, settings.gitlab_url, foundry.manifest, settings.configs_repo)
         self.discovery = Discovery(gitlab, lambda: self.sources.schema_names)
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
-        self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.transformer_projects,
+        self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.processor_projects,
                                settings.poll_interval, settings.full_rescan_interval,
                                pipelines=PipelineSync(self.workspace, settings.pipelines_repo,
                                                       self.sources.project_of(settings.pipelines_repo))
                                if settings.pipelines_repo else None)
 
     async def context(self, graph: dict) -> dict:
-        """What validating a graph needs besides the graph: profiles, schemas, transformer.yaml schemas."""
+        """What validating a graph needs besides the graph: profiles, schemas, processor.yaml schemas."""
         configs = graph.get("configs") or {}
         ctx: dict = {"configs": None, "configs_error": None, "schemas": None,
-                     "decls": declarations(graph, self.watcher.transformers.values())}
+                     "decls": declarations(graph, self.watcher.processors.values())}
         try:
             ctx["configs"] = await self.sources.configs(configs.get("Repo"), configs.get("Ref"))
         except SourceError as e:
@@ -176,7 +176,7 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             "workspace": str(s.workspace),
             "configsRepo": s.settings.configs_repo,
             "schemasRepo": s.settings.configs_repo,
-            "transformerProjects": s.watcher.projects_with_transformers,
+            "processorProjects": s.watcher.projects_with_processors,
             "watcher": s.watcher.status(),
         }
 
@@ -196,15 +196,15 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             out["errors"]["schemas"] = str(e)
         return out
 
-    @app.get("/api/transformers")
-    async def transformers(request: Request):
+    @app.get("/api/processors")
+    async def processors(request: Request):
         s = svc(request)
         try:
             await asyncio.wait_for(s.watcher.ready.wait(), timeout=30)
         except asyncio.TimeoutError:
             pass
         return {
-            "transformers": [t.to_json() for t in sorted(s.watcher.transformers.values(), key=lambda t: t.id)],
+            "processors": [t.to_json() for t in sorted(s.watcher.processors.values(), key=lambda t: t.id)],
             "status": s.watcher.status(),
         }
 
@@ -255,7 +255,7 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
     async def peek(body: PeekBody, request: Request):
         """Server-Sent Events: a read-only live feed of a dataset (see peek.py).
 
-        node is a dataset node, or a transformer (the dataset it writes)."""
+        node is a dataset node, or a processor (the dataset it writes)."""
         s = svc(request)
         ctx = await s.context(body.graph)
         try:

@@ -11,7 +11,7 @@ test("PacketPipeline rebuilt from scratch is byte-identical", async ({ page }) =
   await page.goto("/?new=1");
   await page.getByTestId("pipeline-name").fill("EnrichmentPipeline");
   const box = (await page.getByTestId("canvas").boundingBox())!;
-  // Cards add transforms without a Ref (default branch), like the saved manifest.
+  // Cards add processors without a Ref (default branch), like the saved manifest.
   await dropDataset(page, "PacketPipeline", "Output", box.width * 0.9, box.height / 2);
   await dropCard(page, "Isp", box.width * 0.68, box.height / 2 + 140);
   await dropCard(page, "Decode", box.width * 0.68, box.height / 2 - 140);

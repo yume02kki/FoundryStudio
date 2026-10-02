@@ -434,7 +434,7 @@ a.chip {
   font-size: 12px;
 }
 
-.pnode-transformer {
+.pnode-processor {
   border-top: 3px solid var(--accent);
 }
 
@@ -1237,7 +1237,7 @@ button.tab:hover:not(.active) {
   border-color: var(--error);
 }
 
-/* ---------------------------------------------------------------- live data: stages and transform view */
+/* ---------------------------------------------------------------- live data: stages and processor view */
 
 .live {
   flex: 1;
@@ -1247,7 +1247,7 @@ button.tab:hover:not(.active) {
 }
 
 .live > .feed,
-.live > .transform {
+.live > .processor {
   flex: 1;
   min-height: 0;
 }
@@ -1304,13 +1304,13 @@ button.tab:hover:not(.active) {
   background: currentColor;
 }
 
-.transform {
+.processor {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
 
-.transform-head {
+.processor-head {
   display: grid;
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
@@ -1320,7 +1320,7 @@ button.tab:hover:not(.active) {
   border-bottom: 1px solid var(--border);
 }
 
-.transform-side {
+.processor-side {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -1328,25 +1328,25 @@ button.tab:hover:not(.active) {
   min-width: 0;
 }
 
-.transform-side.right {
+.processor-side.right {
   justify-content: flex-end;
 }
 
-.transform-topic {
+.processor-topic {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
 }
 
-.transform-mid {
+.processor-mid {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
 }
 
-.transform-stats {
+.processor-stats {
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
@@ -1400,7 +1400,7 @@ button.tab:hover:not(.active) {
   padding: 0 6px;
 }
 
-.status-transformed {
+.status-processed {
   color: #8fd694;
   font-size: 14px;
 }
@@ -1482,7 +1482,7 @@ button.tab:hover:not(.active) {
   border-radius: 3px;
 }
 
-/* project tree: repos, grouping folders, transformers */
+/* project tree: repos, grouping folders, processors */
 .tree-icon {
   display: inline-block;
   width: 18px;
@@ -1492,7 +1492,7 @@ button.tab:hover:not(.active) {
   font-weight: 600;
 }
 
-.tree-transformer .tree-icon {
+.tree-processor .tree-icon {
   color: #8ab4f8;
 }
 

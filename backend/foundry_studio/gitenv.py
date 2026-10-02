@@ -1,6 +1,6 @@
 """Environment for the git processes deploy.py starts.
 
-deploy.py shells out to `git clone` to vendor transformer repos. We don't modify it to
+deploy.py shells out to `git clone` to vendor processor repos. We don't modify it to
 pass credentials; instead the backend's own environment carries:
 
 * a git credential helper that answers with $GITLAB_TOKEN at the moment git asks. The

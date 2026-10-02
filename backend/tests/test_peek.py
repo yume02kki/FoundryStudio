@@ -1,4 +1,4 @@
-"""Live dataset feed: config parity with the transformer runtime, schema checks, the demo
+"""Live dataset feed: config parity with the processor runtime, schema checks, the demo
 stream, and (when a broker is available) a real Kafka topic.
 
 The Kafka tests run when STUDIO_TEST_KAFKA is set, e.g.

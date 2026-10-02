@@ -270,10 +270,10 @@ function TopicView({ feedKey, title, testId }: { feedKey: string; title: string;
   );
 }
 
-// --------------------------------------------------------------------------- transformer: input vs output
+// --------------------------------------------------------------------------- processor: input vs output
 
 const STATUS_LABEL: Record<Pair["status"], string> = {
-  transformed: "→",
+  processed: "→",
   dropped: "dropped",
   pending: "…",
   "out-only": "out only",
@@ -297,7 +297,7 @@ function PairRow({ p, now }: { p: Pair; now: number }) {
         <span className="pair-value">
           {p.output ? clip(p.output.value ?? "(empty)", 200) : <i className="muted">{p.status === "dropped" ? "no output" : "…"}</i>}
         </span>
-        <span className="pair-changes">{changes.length ? changes.join(", ") : p.status === "transformed" ? "unchanged" : ""}</span>
+        <span className="pair-changes">{changes.length ? changes.join(", ") : p.status === "processed" ? "unchanged" : ""}</span>
       </button>
       {open && (
         <div className="pair-detail">
@@ -356,15 +356,15 @@ function CheckMark({ m }: { m: FeedMessage }) {
 
 function statusHelp(s: Pair["status"]): string {
   return {
-    transformed: "the transformer produced an output for this record",
-    dropped: "no output for this record after 5 s: the transformer dropped it (or it's stuck)",
-    pending: "waiting for the transformer's output",
+    processed: "the processor produced an output for this record",
+    dropped: "no output for this record after 5 s: the processor dropped it (or it's stuck)",
+    pending: "waiting for the processor's output",
     "out-only": "output whose input record is older than the input window",
     unkeyed: "no Kafka key or guid to match input and output",
   }[s];
 }
 
-function TransformView({ stage, now }: { stage: string; now: number }) {
+function ProcessorView({ stage, now }: { stage: string; now: number }) {
   const graph = useStudio((s) => s.graph);
   const feeds = useStudio((s) => s.feeds);
   const { inputs, outputs } = stageFeeds(graph(), stage);
@@ -379,28 +379,28 @@ function TransformView({ stage, now }: { stage: string; now: number }) {
   const demo = inFeeds.some((f) => f.demo) || outFeed?.demo;
 
   return (
-    <section className="transform" data-testid={`transform-${stage}`}>
-      <header className="transform-head">
-        <div className="transform-side">
+    <section className="processor" data-testid={`processor-${stage}`}>
+      <header className="processor-head">
+        <div className="processor-side">
           <span className="feed-kind">In</span>
           {inputs.map((k) => (
-            <span key={k} className="transform-topic">
+            <span key={k} className="processor-topic">
               <TopicLabel feed={feeds[k]} fallback={k} /> <StatusPill feed={feeds[k]} now={now} />
             </span>
           ))}
         </div>
-        <div className="transform-mid">
+        <div className="processor-mid">
           <b>{stage}</b>
-          <span className="transform-stats" data-testid={`transform-stats-${stage}`}>
-            {inRate}/min in · {rate(outFeed)}/min out · {count("transformed")} transformed · {count("dropped")} dropped
+          <span className="processor-stats" data-testid={`processor-stats-${stage}`}>
+            {inRate}/min in · {rate(outFeed)}/min out · {count("processed")} processed · {count("dropped")} dropped
           </span>
           {demo && <span className="tag tag-warning">demo data</span>}
         </div>
-        <div className="transform-side right">
+        <div className="processor-side right">
           <span className="feed-kind">Out</span>
-          {outputs.length === 0 && <span className="transform-topic muted">not wired</span>}
+          {outputs.length === 0 && <span className="processor-topic muted">not wired</span>}
           {outputs.map((k) => (
-            <span key={k} className="transform-topic">
+            <span key={k} className="processor-topic">
               <TopicLabel feed={feeds[k]} fallback={k} /> <StatusPill feed={feeds[k]} now={now} />
             </span>
           ))}
@@ -486,7 +486,7 @@ export function LiveData() {
     return (
       <div className="live-off-note">
         <p>
-          Watch data move through the pipeline: what arrives on each dataset and what each transformer turns it into.
+          Watch data move through the pipeline: what arrives on each dataset and what each processor turns it into.
           Read-only: Studio never joins the pipeline's consumer groups and never commits offsets.
         </p>
         <button className="btn btn-primary" onClick={() => useStudio.setState({ feedsOn: true })} data-testid="feeds-start">
@@ -524,7 +524,7 @@ export function LiveData() {
       ) : isDatasetNode(stage) ? (
         <TopicView feedKey={datasetName(stage)} title="Dataset" testId={datasetName(stage)} />
       ) : (
-        <TransformView stage={stage} now={now} />
+        <ProcessorView stage={stage} now={now} />
       )}
     </div>
   );

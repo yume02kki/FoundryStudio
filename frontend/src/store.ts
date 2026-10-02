@@ -14,7 +14,7 @@ import {
   type Health,
   type Layout,
   type PipelineListing,
-  type TransformerInfo,
+  type ProcessorInfo,
   type ValidationResult,
   type WatcherStatus,
 } from "./types";
@@ -23,7 +23,7 @@ const FEED_KEEP = 200;
 const idleFeed = (): FeedState => ({ state: "idle", messages: [], count: 0 });
 
 export type PipelineNodeData = { spec: GraphNode };
-export type PNode = Node<PipelineNodeData, "transformer" | "dataset">;
+export type PNode = Node<PipelineNodeData, "processor" | "dataset">;
 export type PEdge = Edge<Record<string, never>, "topic">;
 
 export interface Meta {
@@ -68,7 +68,7 @@ interface State {
 
   catalog: Catalog | null;
 
-  transformers: Record<string, TransformerInfo>;
+  processors: Record<string, ProcessorInfo>;
   changed: Record<string, { kind: "added" | "updated"; at: number }>;
   watcher: WatcherStatus | null;
   health: Health | null;
@@ -76,7 +76,7 @@ interface State {
   live: boolean;
 
   toasts: Toast[];
-  bottomTab: "transformers" | "datasets" | "live";
+  bottomTab: "processors" | "datasets" | "live";
   feedsOn: boolean;
   liveStage: string | null; // the node whose data Live data shows
   feeds: Record<string, FeedState>; // by dataset name
@@ -89,7 +89,7 @@ interface State {
   onNodesChange: (changes: NodeChange<PNode>[]) => void;
   onEdgesChange: (changes: EdgeChange<PEdge>[]) => void;
   connect: (source: string, target: string) => void;
-  addTransformer: (info: TransformerInfo, ref: string, position: { x: number; y: number }) => string;
+  addProcessor: (info: ProcessorInfo, ref: string, position: { x: number; y: number }) => string;
   addDataset: (name: string, spec: DatasetSpec, position: { x: number; y: number }) => string;
   updateSpec: (id: string, update: (spec: GraphNode) => GraphNode) => void;
   renameNode: (from: string, to: string) => string | null;
@@ -98,9 +98,9 @@ interface State {
   setFocus: (focus: State["focus"]) => void;
   markSaved: (origin: Origin) => void;
 
-  setTransformers: (list: TransformerInfo[]) => void;
-  upsertTransformer: (info: TransformerInfo, kind: "added" | "updated") => void;
-  removeTransformer: (id: string) => void;
+  setProcessors: (list: ProcessorInfo[]) => void;
+  upsertProcessor: (info: ProcessorInfo, kind: "added" | "updated") => void;
+  removeProcessor: (id: string) => void;
 
   feedStatus: (key: string, status: Partial<FeedState>) => void;
   feedMessage: (key: string, message: FeedMessage) => void;
@@ -124,7 +124,7 @@ export const useStudio = create<State>()((set, get) => ({
 
   catalog: null,
 
-  transformers: {},
+  processors: {},
   changed: {},
   watcher: null,
   health: null,
@@ -132,7 +132,7 @@ export const useStudio = create<State>()((set, get) => ({
   live: false,
 
   toasts: [],
-  bottomTab: "transformers",
+  bottomTab: "processors",
   feedsOn: false,
   liveStage: null,
   feeds: {},
@@ -205,15 +205,15 @@ export const useStudio = create<State>()((set, get) => ({
         : { edges: [...s.edges, toPEdge(source, target)], revision: s.revision + 1, dirty: true },
     ),
 
-  addTransformer: (info, ref, position) => {
+  addProcessor: (info, ref, position) => {
     const taken = new Set(get().nodes.map((n) => n.id));
-    let id = info.name.replace(/[^A-Za-z0-9._-]/g, "") || "Transformer";
+    let id = info.name.replace(/[^A-Za-z0-9._-]/g, "") || "Processor";
     for (let i = 2; taken.has(id); i++) id = `${info.name}${i}`;
-    // No Ref unless a version was asked for: the transform follows its default branch.
+    // No Ref unless a version was asked for: the processor follows its default branch.
     const spec: GraphNode = {
       id,
-      kind: "transformer",
-      transformer: { Repo: info.repo, ...(info.path ? { Path: info.path } : {}), ...(ref ? { Ref: ref } : {}) },
+      kind: "processor",
+      processor: { Repo: info.repo, ...(info.path ? { Path: info.path } : {}), ...(ref ? { Ref: ref } : {}) },
     };
     set((s) => ({
       nodes: [...s.nodes.map((n) => ({ ...n, selected: false })), { ...toPNode(spec, position), selected: true }],
@@ -248,7 +248,7 @@ export const useStudio = create<State>()((set, get) => ({
 
   renameNode: (from, toName) => {
     const s = get();
-    // A dataset's id is dataset:<its name>; a transform's id is its name.
+    // A dataset's id is dataset:<its name>; a processor's id is its name.
     const dataset = isDatasetNode(from);
     const to = dataset ? datasetNode(toName) : toName;
     if (from === to) return null;
@@ -280,19 +280,19 @@ export const useStudio = create<State>()((set, get) => ({
 
   markSaved: (origin) => set({ dirty: false, origin }),
 
-  setTransformers: (list) => set({ transformers: Object.fromEntries(list.map((t) => [t.id, t])) }),
+  setProcessors: (list) => set({ processors: Object.fromEntries(list.map((t) => [t.id, t])) }),
 
-  upsertTransformer: (info, kind) =>
+  upsertProcessor: (info, kind) =>
     set((s) => ({
-      transformers: { ...s.transformers, [info.id]: info },
+      processors: { ...s.processors, [info.id]: info },
       changed: { ...s.changed, [info.id]: { kind, at: Date.now() } },
     })),
 
-  removeTransformer: (id) =>
+  removeProcessor: (id) =>
     set((s) => {
-      const transformers = { ...s.transformers };
-      delete transformers[id];
-      return { transformers };
+      const processors = { ...s.processors };
+      delete processors[id];
+      return { processors };
     }),
 
   feedStatus: (key, status) =>

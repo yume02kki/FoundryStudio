@@ -1,8 +1,8 @@
 // Shapes shared with the backend; see backend/foundry_studio/manifest.py.
 //
-// On the canvas, transforms and the pipeline's datasets (its DataSets: Kafka topics) are both
-// nodes. An edge dataset -> transform is the transform's In; transform -> dataset its Out.
-// A transform has one of each.
+// On the canvas, processors and the pipeline's datasets (its DataSets: Kafka topics) are both
+// nodes. An edge dataset -> processor is the processor's In; processor -> dataset its Out.
+// A processor has one of each.
 
 export const DATASET = "dataset:";
 export const datasetNode = (name: string) => `${DATASET}${name}`;
@@ -11,8 +11,8 @@ export const datasetName = (id: string) => (isDatasetNode(id) ? id.slice(DATASET
 
 export type ConnectionSettings = Record<string, string | number | boolean>;
 
-/** A Transforms: entry, without In/Out (those are its edges). Its schemas come from transformer.yaml at its Ref. */
-export interface TransformerSpec {
+/** A Processors: entry, without In/Out (those are its edges). Its schemas come from processor.yaml at its Ref. */
+export interface Processorspec {
   Repo?: string;
   Path?: string;
   Ref?: string;
@@ -29,14 +29,14 @@ export interface DatasetSpec {
   [key: string]: unknown;
 }
 
-export type NodeKind = "transformer" | "dataset";
+export type NodeKind = "processor" | "dataset";
 
 export interface GraphNode {
   id: string;
   kind: NodeKind;
-  transformer?: TransformerSpec;
+  processor?: Processorspec;
   dataset?: string; // its key under DataSets, for a dataset node
-  datasetSpec?: DatasetSpec | null; // null: used by a transform but not defined under DataSets
+  datasetSpec?: DatasetSpec | null; // null: used by a processor but not defined under DataSets
 }
 
 export interface GraphEdge {
@@ -102,7 +102,7 @@ export interface Version {
   web_url: string;
 }
 
-export interface TransformerInfo {
+export interface ProcessorInfo {
   id: string;
   project: string;
   path: string;
@@ -126,7 +126,7 @@ export interface WatcherStatus {
   errors: Record<string, string>;
   projects: string[];
   scope?: "fixed" | "membership";
-  withTransformers?: string[];
+  withProcessors?: string[];
   ready: boolean;
 }
 
@@ -139,7 +139,7 @@ export interface Health {
   workspace: string;
   configsRepo: string;
   schemasRepo: string;
-  transformerProjects: string[];
+  processorProjects: string[];
   watcher: WatcherStatus;
 }
 

@@ -33,10 +33,10 @@ export async function dropDataset(page: Page, folder: string, name: string, x: n
   await page.getByTestId("tab-datasets").click();
   await page.getByTestId("other-datasets").click();
   await page.getByTestId(`dataset-card-${folder}-${name}`).dragTo(page.getByTestId("canvas"), { targetPosition: { x, y } });
-  await page.getByTestId("tab-transformers").click();
+  await page.getByTestId("tab-processors").click();
 }
 
-/** Run the demo CLI against the e2e's local GitLab stand-in (like pushing to a transformer repo). */
+/** Run the demo CLI against the e2e's local GitLab stand-in (like pushing to a processor repo). */
 export function demo(...args: string[]) {
   const root = join(process.env.STUDIO_E2E_SCRATCH!, "gitlab");
   execFileSync("uv", ["run", "--project", "../backend", "python", "-m", "foundry_studio.demo", "--root", root, ...args], {

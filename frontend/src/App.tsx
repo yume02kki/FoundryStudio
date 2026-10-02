@@ -44,25 +44,25 @@ function useValidation() {
 function useLiveUpdates() {
   useEffect(() => {
     const resync = async () => {
-      const t = await api.transformers();
-      useStudio.getState().setTransformers(t.transformers);
+      const t = await api.processors();
+      useStudio.getState().setProcessors(t.processors);
       useStudio.setState({ watcher: t.status, live: true });
     };
     return subscribe(
       (e) => {
         const s = useStudio.getState();
         switch (e.type) {
-          case "transformer.added":
-            s.upsertTransformer(e.transformer, "added");
-            s.toast({ kind: "info", text: `New transformer: ${e.transformer.name} (${e.transformer.input} → ${e.transformer.output})` });
+          case "processor.added":
+            s.upsertProcessor(e.processor, "added");
+            s.toast({ kind: "info", text: `New processor: ${e.processor.name} (${e.processor.input} → ${e.processor.output})` });
             break;
-          case "transformer.updated":
-            s.upsertTransformer(e.transformer, "updated");
+          case "processor.updated":
+            s.upsertProcessor(e.processor, "updated");
             if (e.newVersions.length) s.toast({ kind: "info", text: `New version: ${e.newVersions.join(", ")}` });
             break;
-          case "transformer.removed":
-            s.removeTransformer(e.id);
-            s.toast({ kind: "warning", text: `Transformer removed from its repo: ${e.name}` });
+          case "processor.removed":
+            s.removeProcessor(e.id);
+            s.toast({ kind: "warning", text: `Processor removed from its repo: ${e.name}` });
             break;
           case "watcher.status":
             useStudio.setState({ watcher: e.status });

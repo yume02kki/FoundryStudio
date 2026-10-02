@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type DragEvent } from "react";
 import { schemaColor } from "../lib/schemaColor";
 import { useStudio } from "../store";
-import type { TransformerInfo } from "../types";
+import type { ProcessorInfo } from "../types";
 import { DRAG_MIME } from "./Canvas";
 import { Datasets } from "./Datasets";
 import { LiveData, LiveTabBadges } from "./LiveData";
@@ -31,26 +31,26 @@ interface TreeEntry {
   path: string;
   label: string;
   depth: number;
-  kind: "repo" | "folder" | "transformer";
+  kind: "repo" | "folder" | "processor";
   title: string;
 }
 
 /**
- * The tree shows transformers, not raw git directories: a repo, the folders that only
- * group transformers, and each transformer (a crate directory) under its own name.
- * A repo that is a single transformer is just that transformer.
+ * The tree shows processors, not raw git directories: a repo, the folders that only
+ * group processors, and each processor (a crate directory) under its own name.
+ * A repo that is a single processor is just that processor.
  */
-function transformerEntry(project: string, path: string, depth: number, t: TransformerInfo): TreeEntry {
-  return { key: `${project}:${path}`, project, path, label: t.name, depth, kind: "transformer",
+function processorEntry(project: string, path: string, depth: number, t: ProcessorInfo): TreeEntry {
+  return { key: `${project}:${path}`, project, path, label: t.name, depth, kind: "processor",
            title: `${t.input ?? "?"} → ${t.output ?? "?"}${t.description ? `\n${t.description}` : ""}` };
 }
 
-function treeEntries(projects: string[], transformers: TransformerInfo[]): TreeEntry[] {
+function treeEntries(projects: string[], processors: ProcessorInfo[]): TreeEntry[] {
   const out: TreeEntry[] = [];
   for (const project of projects) {
-    const mine = transformers.filter((t) => t.project === project);
+    const mine = processors.filter((t) => t.project === project);
     if (mine.length === 1 && !mine[0].path) {
-      out.push(transformerEntry(project, "", 0, mine[0]));
+      out.push(processorEntry(project, "", 0, mine[0]));
       continue;
     }
     out.push({ key: `${project}:`, project, path: "", label: project.split("/").pop() ?? project, depth: 0, kind: "repo", title: project });
@@ -66,7 +66,7 @@ function treeEntries(projects: string[], transformers: TransformerInfo[]): TreeE
       const depth = path ? path.split("/").length : 1;
       out.push(
         t
-          ? transformerEntry(project, path, depth, t)
+          ? processorEntry(project, path, depth, t)
           :{ key: `${project}:${path}`, project, path, label: path.split("/").pop()!, depth, kind: "folder", title: path },
       );
     }
@@ -82,9 +82,9 @@ function SchemaChip({ schema }: { schema: string | null }) {
   );
 }
 
-function Card({ t, favorite, onFavorite }: { t: TransformerInfo; favorite: boolean; onFavorite: () => void }) {
+function Card({ t, favorite, onFavorite }: { t: ProcessorInfo; favorite: boolean; onFavorite: () => void }) {
   const changed = useStudio((s) => s.changed[t.id]);
-  // Cards add the transformer without a Ref (its default branch); pin a version on the node.
+  // Cards add the processor without a Ref (its default branch); pin a version on the node.
   const version = t.versions.find((v) => v.kind === "branch") ?? t.versions[0];
   const fresh = changed && Date.now() - changed.at < 15000;
 
@@ -124,7 +124,7 @@ function Card({ t, favorite, onFavorite }: { t: TransformerInfo; favorite: boole
 }
 
 export function AssetBrowser() {
-  const transformers = useStudio((s) => s.transformers);
+  const processors = useStudio((s) => s.processors);
   const health = useStudio((s) => s.health);
   const watcher = useStudio((s) => s.watcher);
   const tab = useStudio((s) => s.bottomTab);
@@ -140,8 +140,8 @@ export function AssetBrowser() {
     return () => clearInterval(t);
   }, []);
 
-  const list = useMemo(() => Object.values(transformers).sort((a, b) => a.name.localeCompare(b.name)), [transformers]);
-  const projects = health?.transformerProjects ?? [...new Set(list.map((t) => t.project))];
+  const list = useMemo(() => Object.values(processors).sort((a, b) => a.name.localeCompare(b.name)), [processors]);
+  const projects = health?.processorProjects ?? [...new Set(list.map((t) => t.project))];
   const tree = useMemo(() => treeEntries(projects, list), [projects, list]);
 
   const toggleFavorite = (id: string) => {
@@ -162,7 +162,7 @@ export function AssetBrowser() {
     return [t.name, t.path, t.description, t.input, t.output].some((v) => v?.toLowerCase().includes(q));
   });
   const crumbs =
-    selected === FAVORITES ? ["Favorites"] : selected ? selected.replace(":", "/").split("/").filter(Boolean) : ["All transformers"];
+    selected === FAVORITES ? ["Favorites"] : selected ? selected.replace(":", "/").split("/").filter(Boolean) : ["All processors"];
   const errors = Object.entries(watcher?.errors ?? {});
 
   return (
@@ -170,11 +170,11 @@ export function AssetBrowser() {
       <div className="panel-tabs" role="tablist">
         <button
           role="tab"
-          className={`tab${tab === "transformers" ? " active" : ""}`}
-          onClick={() => useStudio.setState({ bottomTab: "transformers" })}
-          data-testid="tab-transformers"
+          className={`tab${tab === "processors" ? " active" : ""}`}
+          onClick={() => useStudio.setState({ bottomTab: "processors" })}
+          data-testid="tab-processors"
         >
-          Transformers
+          Processors
         </button>
         <button
           role="tab"
@@ -193,10 +193,10 @@ export function AssetBrowser() {
           Live data <LiveTabBadges />
         </button>
         <span className="tab-spacer" />
-        {tab === "transformers" ? (
+        {tab === "processors" ? (
           <input
             className="search"
-            placeholder="Search transformers"
+            placeholder="Search processors"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             data-testid="asset-search"
@@ -225,7 +225,7 @@ export function AssetBrowser() {
             <span className="fav">★</span> Favorites
           </div>
           {favorites
-            .map((id) => transformers[id])
+            .map((id) => processors[id])
             .filter(Boolean)
             .map((t) => (
               <div key={t.id} className="tree-item depth-1 muted" onClick={() => setSelected(`${t.project}:${t.path}`)}>
@@ -236,7 +236,7 @@ export function AssetBrowser() {
             className={`tree-item tree-root${selected === null ? " active" : ""}`}
             onClick={() => setSelected(null)}
           >
-            ▾ Transformers
+            ▾ Processors
           </div>
           {tree.map((f) => (
             <div
@@ -246,7 +246,7 @@ export function AssetBrowser() {
               title={f.title}
               data-testid={`tree-${f.project}/${f.path}`}
             >
-              <span className="tree-icon">{f.kind === "transformer" ? "⚙" : "📁"}</span>
+              <span className="tree-icon">{f.kind === "processor" ? "⚙" : "📁"}</span>
               {f.label}
             </div>
           ))}
@@ -255,7 +255,7 @@ export function AssetBrowser() {
           <div className="crumbs">
             {crumbs.join(" › ")}
             <span className="crumbs-right">
-              {shown.length} transformer{shown.length === 1 ? "" : "s"} · drag onto the canvas
+              {shown.length} processor{shown.length === 1 ? "" : "s"} · drag onto the canvas
             </span>
           </div>
           {errors.length > 0 && (
@@ -271,7 +271,7 @@ export function AssetBrowser() {
             {shown.map((t) => (
               <Card key={t.id} t={t} favorite={favorites.includes(t.id)} onFavorite={() => toggleFavorite(t.id)} />
             ))}
-            {shown.length === 0 && <div className="empty">No transformers here.</div>}
+            {shown.length === 0 && <div className="empty">No processors here.</div>}
           </div>
         </div>
       </div>

@@ -3,7 +3,7 @@ import type { FeedMessage, GraphNode } from "../types";
 import type { FeedState } from "../types";
 import { diffRecords, edgeDataset, liveKeys, pairRecords, recordId, stageFeeds, stageStats, stages, type GraphLike } from "./stages";
 
-const t = (id: string): GraphNode => ({ id, kind: "transformer", transformer: {} });
+const t = (id: string): GraphNode => ({ id, kind: "processor", processor: {} });
 const d = (name: string): GraphNode => ({ id: `dataset:${name}`, kind: "dataset", dataset: name });
 const graph: GraphLike = {
   nodes: [d("packets.decoded"), t("Base64Decoder"), d("raw.xml"), t("XmlToJson"), d("encoded")],
@@ -30,7 +30,7 @@ const msg = (value: string, secondsAgo: number, key: string | null = null): Feed
 });
 
 describe("stages", () => {
-  it("orders datasets and transformers along the pipeline", () => {
+  it("orders datasets and processors along the pipeline", () => {
     expect(stages(graph)).toEqual([
       "dataset:raw.xml", "XmlToJson", "dataset:encoded", "Base64Decoder", "dataset:packets.decoded",
     ]);
@@ -58,13 +58,13 @@ describe("pairing", () => {
     const outputs = [msg('{"guid":"a","data":"x"}', 0.5), msg('{"guid":"z"}', 4)];
     const pairs = pairRecords(inputs, outputs, NOW);
     const by = Object.fromEntries(pairs.map((p) => [p.id, p.status]));
-    expect(by).toMatchObject({ a: "transformed", b: "dropped", c: "pending", z: "out-only", "in:3": "unkeyed" });
+    expect(by).toMatchObject({ a: "processed", b: "dropped", c: "pending", z: "out-only", "in:3": "unkeyed" });
     expect(pairs[0].id).toBe("a"); // newest first
   });
 });
 
 describe("diffRecords", () => {
-  it("shows what a transformer changed", () => {
+  it("shows what a processor changed", () => {
     const d = diffRecords(
       "<packet><guid>g</guid><data>SGVsbG8=</data></packet>",
       '{"guid":"g","data":"Hello","extra":1}',
@@ -83,17 +83,17 @@ describe("live overview", () => {
     expect(liveKeys(graph)).toEqual(["raw.xml", "encoded", "packets.decoded"]);
   });
 
-  it("summarises a transformer's throughput and drops", () => {
+  it("summarises a processor's throughput and drops", () => {
     const feeds = {
       encoded: feed([msg('{"guid":"a"}', 2), msg('{"guid":"b"}', 20), msg('{"guid":"c"}', 30)]),
       "packets.decoded": feed([msg('{"guid":"a"}', 1), msg('{"guid":"c"}', 29)]),
     };
     const s = stageStats(graph, "Base64Decoder", feeds, NOW);
-    expect(s).toMatchObject({ inRate: 3, outRate: 2, transformed: 2, dropped: 1, tone: "warning", label: "3 in → 2 out/min" });
+    expect(s).toMatchObject({ inRate: 3, outRate: 2, processed: 2, dropped: 1, tone: "warning", label: "3 in → 2 out/min" });
     expect(stageStats(graph, "dataset:packets.decoded", feeds, NOW)).toMatchObject({ inRate: 2, tone: "success" });
   });
 
-  it("flags a transformer that receives but produces nothing", () => {
+  it("flags a processor that receives but produces nothing", () => {
     const feeds = { encoded: feed([msg('{"guid":"a"}', 2)]), "packets.decoded": feed([]) };
     expect(stageStats(graph, "Base64Decoder", feeds, NOW).tone).toBe("danger");
     expect(stageStats(graph, "Base64Decoder", {}, NOW).label).toBe("Off");

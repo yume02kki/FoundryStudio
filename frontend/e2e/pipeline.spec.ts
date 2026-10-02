@@ -34,7 +34,7 @@ test("PacketPipeline draws Input -> XmlToJson -> ConvertedPackets -> Decode, Isp
   await expect(page.getByTestId("validation-status")).toContainText("manifest.py: valid");
 });
 
-test("wiring a dataset of the wrong schema is refused with manifest.py's message; one In per transform", async ({ page }) => {
+test("wiring a dataset of the wrong schema is refused with manifest.py's message; one In per processor", async ({ page }) => {
   await page.goto("/?new=1");
   await expect(page.getByTestId("canvas")).toBeVisible();
   const box = (await page.getByTestId("canvas").boundingBox())!;
@@ -58,29 +58,29 @@ test("wiring a dataset of the wrong schema is refused with manifest.py's message
     await expect(page.getByTestId("drag-tooltip")).toHaveText("XmlToJson writes Packets but Output carries EnrichedPackets");
   });
   await expect(page.getByTestId("connection-refused")).toContainText(
-    "Transforms.XmlToJson.Out: XmlToJson writes Packets but Output carries EnrichedPackets",
+    "Processors.XmlToJson.Out: XmlToJson writes Packets but Output carries EnrichedPackets",
   );
   await page.locator(".toast .icon-btn").first().click();
   await expect(page.getByTestId(`rf__edge-XmlToJson->${OUT}`)).toHaveCount(0);
 
-  // A transform reads one dataset: a second XmlPackets dataset can't feed XmlToJson too.
+  // A processor reads one dataset: a second XmlPackets dataset can't feed XmlToJson too.
   await page.getByTestId("tab-datasets").click();
   await page.getByTestId("add-dataset").click();
   await page.getByTestId("new-dataset-name").fill("Replay");
   await page.getByTestId("new-dataset-topic").fill("raw.xml.replay");
   await page.getByTestId("new-dataset-schema").selectOption("XmlPackets");
   await page.getByTestId("new-dataset-add").click();
-  await page.getByTestId("tab-transformers").click();
+  await page.getByTestId("tab-processors").click();
   await expect(page.getByTestId("node-dataset:Replay")).toBeVisible();
   await page.getByTestId("node-dataset:Replay").dragTo(page.getByTestId("canvas"), { targetPosition: { x: box.width * 0.15, y: box.height / 2 + 160 } });
   await wire(page, handle(page, "dataset:Replay", "out"), handle(page, "XmlToJson", "in"));
-  await expect(page.getByTestId("connection-refused").filter({ hasText: "XmlToJson already reads Input; a transform reads one dataset" })).toHaveCount(1);
+  await expect(page.getByTestId("connection-refused").filter({ hasText: "XmlToJson already reads Input; a processor reads one dataset" })).toHaveCount(1);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
   await dropCard(page, "Isp", box.width * 0.55, box.height / 2 - 150);
 
-  // Transforms only connect through a dataset.
+  // Processors only connect through a dataset.
   await wire(page, handle(page, "XmlToJson", "out"), handle(page, "Isp", "in"));
-  await expect(page.getByTestId("connection-refused").filter({ hasText: "transforms connect through a dataset" })).toHaveCount(1);
+  await expect(page.getByTestId("connection-refused").filter({ hasText: "processors connect through a dataset" })).toHaveCount(1);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
 });
 

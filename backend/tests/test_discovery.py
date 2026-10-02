@@ -1,4 +1,4 @@
-"""Transformer discovery against a fake GitLab (local git repos)."""
+"""Processor discovery against a fake GitLab (local git repos)."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def commit(repo, files: dict[str, str], message: str, tag: str | None = None):
 
 
 @pytest.mark.anyio
-async def test_one_transformer_per_repo_root(fake):
+async def test_one_processor_per_repo_root(fake):
     found = await discovery(fake).scan_project(XMLTOJSON)
     assert set(found) == {f"{XMLTOJSON}:"}
     x = found[f"{XMLTOJSON}:"]
@@ -49,19 +49,19 @@ async def test_versions_sort_by_semver(demo_root, fake):
 
 
 @pytest.mark.anyio
-async def test_folders_with_transformer_yaml_in_a_monorepo(demo_root, fake):
+async def test_folders_with_processor_yaml_in_a_monorepo(demo_root, fake):
     repo = demo_root / "team-b" / "enrichers"
     repo.mkdir(parents=True)
     demo._git(repo, "init", "-q", "-b", "main")
     commit(repo, {
-        "GeoTag/transformer.yaml": "name: GeoTag\nin: Packets\nout: Packets\n",
-        "GeoTag/bin/Release/transformer.yaml": "name: build output, not a transformer\n",
-        "Shout/transformer.yaml": "name: Shout\nin: Packets\nout: Bogus\n",
-    }, "two transformers", tag="GeoTag/v0.1.0")
+        "GeoTag/processor.yaml": "name: GeoTag\nin: Packets\nout: Packets\n",
+        "GeoTag/bin/Release/processor.yaml": "name: build output, not a processor\n",
+        "Shout/processor.yaml": "name: Shout\nin: Packets\nout: Bogus\n",
+    }, "two processors", tag="GeoTag/v0.1.0")
     found = await discovery(fake).scan_project("team-b/enrichers")
     assert set(found) == {"team-b/enrichers:GeoTag", "team-b/enrichers:Shout"}
     assert found["team-b/enrichers:GeoTag"].latest == "GeoTag/v0.1.0"
-    assert found["team-b/enrichers:Shout"].warnings == ["transformer.yaml out: 'Bogus' is not a schema in configs"]
+    assert found["team-b/enrichers:Shout"].warnings == ["processor.yaml out: 'Bogus' is not a schema in configs"]
 
     before = found["team-b/enrichers:GeoTag"].head
     commit(repo, {"Shout/README.md": "only Shout changes\n"}, "touch Shout")

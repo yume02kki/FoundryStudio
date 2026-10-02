@@ -17,18 +17,18 @@ test("Live data: the whole pipeline at a glance, then each step by clicking on t
   await expect(page.getByTestId("activity-XmlToJson")).toContainText(/\d+ in → \d+ out\/min/);
   await expect(page.getByTestId("activity-dataset:Output")).toContainText("Flowing");
 
-  // Clicking a transform shows its input next to its output.
+  // Clicking a processor shows its input next to its output.
   await page.getByTestId("node-XmlToJson").click();
-  const xml = page.getByTestId("transform-XmlToJson");
+  const xml = page.getByTestId("processor-XmlToJson");
   await expect(xml).toContainText("Input");
   await expect(xml).toContainText("ConvertedPackets");
-  await xml.locator(".pair-transformed .pair-line").first().click();
+  await xml.locator(".pair-processed .pair-line").first().click();
   await expect(xml.locator(".diff")).toContainText("XML → JSON");
 
   // Decode decodes `data` and drops records that aren't UTF-8 text.
   await page.getByTestId("node-Decode").click();
-  const decode = page.getByTestId("transform-Decode");
-  await expect(decode.locator(".pair-transformed .pair-changes").first()).toContainText("data");
+  const decode = page.getByTestId("processor-Decode");
+  await expect(decode.locator(".pair-processed .pair-changes").first()).toContainText("data");
   await expect(decode.locator(".pair-dropped").first()).toBeVisible({ timeout: 20_000 });
   await expect(page.getByTestId("activity-Decode")).toContainText("dropped");
 

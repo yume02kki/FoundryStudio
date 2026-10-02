@@ -33,14 +33,14 @@ def test_graph_shape():
     assert datasets["ConvertedPackets"] == {"Type": "Kafka", "Config": "kafka/prod", "DataSchema": "Packets",
                                             "Topic": "enrichment.packets"}
     isp = next(n for n in graph["nodes"] if n["id"] == "Isp")
-    assert isp["transformer"] == {"Repo": "https://gitlab.com/foundry-platform/enrichers/IspEnricher.git"}
+    assert isp["processor"] == {"Repo": "https://gitlab.com/foundry-platform/enrichers/IspEnricher.git"}
     assert wiring(graph)["Isp"] == {"Inputs": ["ConvertedPackets"], "Outputs": ["Output"]}
 
 
 def test_canonical_form_orders_by_data_flow_and_keeps_extras():
     text = """\
 Name: P
-Transforms:
+Processors:
   B: {Repo: r, Ref: v1.0.0, In: Mid, Out: Sink}
   A: {In: Src, Out: Mid, Repo: r, Path: /sub/}
 DataSets:
@@ -53,8 +53,8 @@ Future: 1
     out = graph_to_manifest(manifest_to_graph(text))
     data = yaml.safe_load(out)
     assert list(data["DataSets"]) == ["Src", "Mid", "Sink", "Unused"]
-    assert list(data["Transforms"]) == ["A", "B"]
-    assert data["Transforms"]["A"] == {"Repo": "r", "Path": "sub", "In": "Src", "Out": "Mid"}
+    assert list(data["Processors"]) == ["A", "B"]
+    assert data["Processors"]["A"] == {"Repo": "r", "Path": "sub", "In": "Src", "Out": "Mid"}
     assert list(data["DataSets"]["Sink"]["ConnectionSettings"]) == ["Brokers", "SecretRef"]
     assert data["Future"] == 1
     assert "Configs" not in data
@@ -62,13 +62,13 @@ Future: 1
 
 
 def test_undefined_dataset_becomes_a_node_with_a_warning():
-    graph = manifest_to_graph("Name: P\nTransforms:\n  A: {Repo: r, In: Ghost, Out: Ghost2}\n")
+    graph = manifest_to_graph("Name: P\nProcessors:\n  A: {Repo: r, In: Ghost, Out: Ghost2}\n")
     ghost = next(n for n in graph["nodes"] if n["id"] == "dataset:Ghost")
     assert ghost["datasetSpec"] is None
     assert graph["warnings"] == ["A uses dataset Ghost, which isn't under DataSets",
                                  "A uses dataset Ghost2, which isn't under DataSets"]
     out = yaml.safe_load(graph_to_manifest(graph))
-    assert "DataSets" not in out and out["Transforms"]["A"]["In"] == "Ghost"
+    assert "DataSets" not in out and out["Processors"]["A"]["In"] == "Ghost"
 
 
 def test_rejects_non_mapping():

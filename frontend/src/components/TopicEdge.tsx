@@ -17,10 +17,10 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
   const validation = useStudio((s) => s.validation);
   const focus = useStudio((s) => s.focus);
   const nodes = useStudio((s) => s.nodes);
-  const transformers = useStudio((s) => s.transformers);
+  const processors = useStudio((s) => s.processors);
 
   const sourceNode = nodes.find((n) => n.id === source)?.data.spec;
-  const color = schemaColor(emits(sourceNode, transformers));
+  const color = schemaColor(emits(sourceNode, processors));
   const errors = issuesFor(validation, undefined, [source, target]);
   const focused = focus?.edges.includes(id);
   const stroke = errors.length ? "var(--error)" : color;
@@ -67,7 +67,7 @@ export function DragTooltip() {
     connection.fromHandle.type === "source"
       ? [connection.fromNode.id, connection.toNode.id]
       : [connection.toNode.id, connection.fromNode.id];
-  const check = checkConnection(st.graph(), st.transformers, s, t);
+  const check = checkConnection(st.graph(), st.processors, s, t);
   if (check.ok) return null;
   const at = flow.flowToScreenPosition(connection.to);
   return (

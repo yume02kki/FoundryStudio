@@ -156,7 +156,7 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string) => void; onNe
         className={`chip chip-${live ? (watchErrors ? "warn" : "muted") : "error"}`}
         title={
           live
-            ? `Watching ${watcher?.scope === "fixed" ? watcher.projects.join(", ") : `every project you're a member of (${watcher?.projects.length ?? 0})`}; transformers in ${(watcher?.withTransformers ?? []).join(", ") || "none yet"} (${watcher?.mode}, every ${watcher?.pollInterval}s)` +
+            ? `Watching ${watcher?.scope === "fixed" ? watcher.projects.join(", ") : `every project you're a member of (${watcher?.projects.length ?? 0})`}; processors in ${(watcher?.withProcessors ?? []).join(", ") || "none yet"} (${watcher?.mode}, every ${watcher?.pollInterval}s)` +
               (watchErrors ? `\n${Object.entries(watcher!.errors).map(([p, e]) => `${p}: ${e}`).join("\n")}` : "")
             : "Live updates disconnected"
         }

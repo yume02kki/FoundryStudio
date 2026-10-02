@@ -1,7 +1,7 @@
-"""Transformer discovery: find transformer folders in GitLab projects and list their versions.
+"""Processor discovery: find processor folders in GitLab projects and list their versions.
 
-A transformer is any folder with a `transformer.yaml` (name, in, out, description)
-(foundry's TRANSFORMERS.md). A version from before its folder had one carries a warning.
+A processor is any folder with a `processor.yaml` (name, in, out, description)
+(foundry's PROCESSORS.md). A version from before its folder had one carries a warning.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ import yaml
 
 from .gitlab import GitLab
 
-DECL_FILE = "transformer.yaml"
+DECL_FILE = "processor.yaml"
 _SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 
 
@@ -35,7 +35,7 @@ class Decl:
     input: str | None
     output: str | None
     description: str
-    source: str  # "transformer.yaml" | "none"
+    source: str  # "processor.yaml" | "none"
     warnings: list[str] = field(default_factory=list)
 
 
@@ -54,7 +54,7 @@ class Version:
 
 
 @dataclass
-class TransformerInfo:
+class ProcessorInfo:
     id: str  # "<project>:<path>"
     project: str
     path: str
@@ -118,7 +118,7 @@ class Discovery:
         self._decl_cache[key] = decl
         return decl
 
-    async def scan_project(self, project: str) -> dict[str, TransformerInfo]:
+    async def scan_project(self, project: str) -> dict[str, ProcessorInfo]:
         proj = await self.gitlab.get_project(project)
         branch = proj["default_branch"]
         head = await self.gitlab.get_commit(project, branch)
@@ -131,7 +131,7 @@ class Discovery:
         infos = await asyncio.gather(*(self._crate(proj, head, path) for path in sorted(folders)))
         return {i.id: i for i in infos}
 
-    async def _crate(self, proj: dict, repo_head: dict, path: str) -> TransformerInfo:
+    async def _crate(self, proj: dict, repo_head: dict, path: str) -> ProcessorInfo:
         project = proj["path_with_namespace"]
         # The crate's newest default-branch version is the last commit that touched its folder.
         head = await self.gitlab.last_commit(project, repo_head["id"], path) or repo_head
@@ -159,7 +159,7 @@ class Discovery:
         ))
         latest = versions[0]
         name = head_decl.name or (posixpath.basename(path) if path else None) or project
-        return TransformerInfo(
+        return ProcessorInfo(
             id=f"{project}:{path}", project=project, path=path, name=name, description=head_decl.description,
             repo=proj["http_url_to_repo"], web_url=f"{web}/-/tree/{proj['default_branch']}/{path}".rstrip("/"),
             input=latest.input, output=latest.output, warnings=head_decl.warnings,

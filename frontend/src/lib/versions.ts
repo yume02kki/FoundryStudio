@@ -1,4 +1,4 @@
-import type { TransformerInfo, TransformerSpec, Version } from "../types";
+import type { ProcessorInfo, Processorspec, Version } from "../types";
 
 const SEMVER = /v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/;
 
@@ -25,8 +25,8 @@ const normRepo = (url: string | undefined) =>
     .replace(/\.git$/, "")
     .replace(/\/$/, "");
 
-/** The discovered transformer a canvas node was dragged from (same repo and folder). */
-export function findInfo(spec: TransformerSpec | undefined, infos: Iterable<TransformerInfo>): TransformerInfo | undefined {
+/** The discovered processor a canvas node was dragged from (same repo and folder). */
+export function findInfo(spec: Processorspec | undefined, infos: Iterable<ProcessorInfo>): ProcessorInfo | undefined {
   if (!spec) return undefined;
   const repo = normRepo(spec.Repo);
   const path = (spec.Path ?? "").replace(/^\/+|\/+$/g, "");
@@ -36,12 +36,12 @@ export function findInfo(spec: TransformerSpec | undefined, infos: Iterable<Tran
   return undefined;
 }
 
-/** The default-branch version: what a transformer without a Ref runs (foundry: no Ref = HEAD). */
-export function headVersion(info: TransformerInfo | undefined): Version | undefined {
+/** The default-branch version: what a processor without a Ref runs (foundry: no Ref = HEAD). */
+export function headVersion(info: ProcessorInfo | undefined): Version | undefined {
   return info?.versions.find((v) => v.kind === "branch");
 }
 
-export function versionFor(info: TransformerInfo | undefined, ref: string | undefined): Version | undefined {
+export function versionFor(info: ProcessorInfo | undefined, ref: string | undefined): Version | undefined {
   if (!info) return undefined;
   if (!ref || ref === "HEAD") return headVersion(info);
   return info.versions.find((v) => v.ref === ref) ?? info.versions.find((v) => v.commit.startsWith(ref));
@@ -52,7 +52,7 @@ export function versionFor(info: TransformerInfo | undefined, ref: string | unde
  * semver tag exists; a pinned commit is outdated when the newest version is a
  * different commit.
  */
-export function updateFor(info: TransformerInfo | undefined, ref: string | undefined): Version | undefined {
+export function updateFor(info: ProcessorInfo | undefined, ref: string | undefined): Version | undefined {
   // No Ref follows the default branch, so it's always on the latest.
   if (!info || !ref || ref === "HEAD" || info.versions.length === 0) return undefined;
   const newest = info.versions[0];

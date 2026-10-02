@@ -8,8 +8,8 @@ cd "$(dirname "$0")/.."
 (cd backend && uv sync -q)
 
 if [ -z "${STUDIO_FAKE_GITLAB:-}" ] && [ -z "${GITLAB_TOKEN:-}" ]; then
-  echo "warning: GITLAB_TOKEN is not set: only public projects are readable, and transformers are only" >&2
-  echo "         found in STUDIO_TRANSFORMER_PROJECTS. Export it, or run 'make demo' for the offline demo." >&2
+  echo "warning: GITLAB_TOKEN is not set: only public projects are readable, and processors are only" >&2
+  echo "         found in STUDIO_PROCESSOR_PROJECTS. Export it, or run 'make demo' for the offline demo." >&2
 fi
 
 PORT="${STUDIO_PORT:-8000}"

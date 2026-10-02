@@ -21,11 +21,11 @@ function Modal({ title, onClose, children }: { title: string; onClose: () => voi
 export function VersionPicker() {
   const nodeId = useStudio((s) => s.versionPickerFor);
   const node = useStudio((s) => s.nodes.find((n) => n.id === s.versionPickerFor));
-  const transformers = useStudio((s) => s.transformers);
+  const processors = useStudio((s) => s.processors);
   const updateSpec = useStudio((s) => s.updateSpec);
   if (!nodeId || !node) return null;
-  const spec = node.data.spec.transformer;
-  const info = findInfo(spec, Object.values(transformers));
+  const spec = node.data.spec.processor;
+  const info = findInfo(spec, Object.values(processors));
   const current = versionFor(info, spec?.Ref);
   const close = () => useStudio.setState({ versionPickerFor: null });
 
@@ -36,8 +36,8 @@ export function VersionPicker() {
           className={`version${!spec?.Ref ? " current" : ""}`}
           onClick={() => {
             updateSpec(nodeId, (n) => {
-              const { Ref: _old, ...rest } = n.transformer ?? {};
-              return { ...n, transformer: rest };
+              const { Ref: _old, ...rest } = n.processor ?? {};
+              return { ...n, processor: rest };
             });
             close();
           }}
@@ -51,7 +51,7 @@ export function VersionPicker() {
             key={v.ref}
             className={`version${spec?.Ref && v.ref === current?.ref ? " current" : ""}`}
             onClick={() => {
-              updateSpec(nodeId, (n) => ({ ...n, transformer: { ...n.transformer, Ref: v.ref } }));
+              updateSpec(nodeId, (n) => ({ ...n, processor: { ...n.processor, Ref: v.ref } }));
               close();
             }}
           >

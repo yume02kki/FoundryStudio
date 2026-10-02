@@ -1,13 +1,13 @@
 """UI graph <-> PipelineManifest.yaml.
 
 The manifest format is the contract with manifest.py (foundry-platform/common/scripts), so the UI
-never invents fields. On the canvas, transforms and datasets are both nodes: an edge
-dataset -> transform is the transform's In, transform -> dataset its Out. A transform has
+never invents fields. On the canvas, processors and datasets are both nodes: an edge
+dataset -> processor is the processor's In, processor -> dataset its Out. A processor has
 exactly one of each. Every entry under DataSets is a dataset node, wired or not. Node
 positions live in a separate PipelineManifest.layout.json.
 
 The manifest is written in one canonical form: the layout and comments of the pipelines'
-own manifests, transforms in topological order (ties broken by name) and datasets in the
+own manifests, processors in topological order (ties broken by name) and datasets in the
 order data flows through them. Writing is therefore deterministic: rebuilding a pipeline by
 hand yields the same bytes no matter in which order things were dragged and wired.
 """
@@ -20,10 +20,10 @@ import yaml
 
 from .foundry import DATASET, dataset_node
 
-TRANSFORM_KEYS = ("Repo", "Ref", "Path", "In", "Out")
+PROCESSOR_KEYS = ("Repo", "Ref", "Path", "In", "Out")
 DATASET_KEYS = ("Type", "Config", "DataSchema", "Topic", "ConnectionSettings")
 CONNECTION_KEYS = ("Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef")
-TOP_LEVEL = ("Name", "Configs", "DataSets", "Transforms")
+TOP_LEVEL = ("Name", "Configs", "DataSets", "Processors")
 
 HEADER = ("# yaml-language-server: $schema=https://gitlab.com/foundry-platform/common/scripts/-/jobs/artifacts/main/raw/"
           "manifest.schema.json?job=schema")
@@ -93,11 +93,11 @@ def manifest_to_graph(text: str) -> dict:
         nodes.append({"id": dataset_node(str(name)), "kind": "dataset", "dataset": str(name),
                       "datasetSpec": dict(spec) if isinstance(spec, dict) else {}})
 
-    transforms = raw.get("Transforms") if isinstance(raw.get("Transforms"), dict) else {}
-    for name, spec in transforms.items():
+    processors = raw.get("Processors") if isinstance(raw.get("Processors"), dict) else {}
+    for name, spec in processors.items():
         spec = dict(spec) if isinstance(spec, dict) else {}
         ins, out = spec.pop("In", None), spec.pop("Out", None)
-        nodes.append({"id": str(name), "kind": "transformer", "transformer": spec})
+        nodes.append({"id": str(name), "kind": "processor", "processor": spec})
         for ds, edge in ((ins, {"source": dataset_node(str(ins)), "target": str(name)}),
                          (out, {"source": str(name), "target": dataset_node(str(out))})):
             if ds is None:
@@ -123,20 +123,20 @@ def manifest_to_graph(text: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 def wiring(graph: dict) -> dict[str, dict]:
-    """Each transform's Inputs and Outputs (the datasets it reads and writes, in name order).
+    """Each processor's Inputs and Outputs (the datasets it reads and writes, in name order).
 
     The manifest allows one of each; the canvas refuses a second wire, and validation reports
     it if one gets through."""
     nodes = {n["id"]: n for n in graph.get("nodes", [])}
     out: dict[str, dict] = {n["id"]: {"Inputs": [], "Outputs": []}
-                            for n in nodes.values() if n.get("kind") == "transformer"}
+                            for n in nodes.values() if n.get("kind") == "processor"}
     for e in graph.get("edges", []):
         s, t = nodes.get(e["source"]), nodes.get(e["target"])
         if not s or not t:
             continue
-        if s.get("kind") == "dataset" and t.get("kind") == "transformer":
+        if s.get("kind") == "dataset" and t.get("kind") == "processor":
             out[t["id"]]["Inputs"].append(s["dataset"])
-        elif s.get("kind") == "transformer" and t.get("kind") == "dataset":
+        elif s.get("kind") == "processor" and t.get("kind") == "dataset":
             out[s["id"]]["Outputs"].append(t["dataset"])
     for w in out.values():
         w["Inputs"] = sorted(dict.fromkeys(w["Inputs"]))
@@ -145,7 +145,7 @@ def wiring(graph: dict) -> dict[str, dict]:
 
 
 def canonical_order(wired: dict[str, dict]) -> list[str]:
-    """Kahn's algorithm with name-sorted ties; transforms on a cycle go last."""
+    """Kahn's algorithm with name-sorted ties; processors on a cycle go last."""
     feeds = {t: {r for r, rw in wired.items() if r != t and set(wired[t]["Outputs"]) & set(rw["Inputs"])}
              for t in wired}
     indeg = {t: 0 for t in wired}
@@ -197,15 +197,15 @@ def graph_to_manifest(graph: dict) -> str:
         sections.append(lines)
 
     if order:
-        lines = ["Transforms:"]
+        lines = ["Processors:"]
         for j, t in enumerate(order):
-            spec = {k: v for k, v in (nodes[t].get("transformer") or {}).items() if k not in ("In", "Out")}
+            spec = {k: v for k, v in (nodes[t].get("processor") or {}).items() if k not in ("In", "Out")}
             if spec.get("Path") is not None:
                 spec["Path"] = str(spec["Path"]).strip("/")
             ins, outs = wired[t]["Inputs"], wired[t]["Outputs"]
             # One of each; with several (refused by the canvas), the first is written and validation flags it.
             spec.update(In=ins[0] if ins else None, Out=outs[0] if outs else None)
-            spec = _ordered(spec, TRANSFORM_KEYS)
+            spec = _ordered(spec, PROCESSOR_KEYS)
             lines += ([""] if j else []) + (_value_lines(t, spec, 2) if spec else [f"  {_key(t)}: {{}}"])
         sections.append(lines)
 

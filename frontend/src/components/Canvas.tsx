@@ -16,13 +16,13 @@ import { ALL_COLORS } from "../lib/schemaColor";
 import { useStudio, type PEdge, type PNode } from "../store";
 import type { DatasetSpec } from "../types";
 import { placeDataset } from "./Datasets";
-import { DatasetNode, TransformerNode } from "./PipelineNode";
+import { DatasetNode, ProcessorNode } from "./PipelineNode";
 import { ArrowMarkers, ConnectionLine, DragTooltip, TopicEdge } from "./TopicEdge";
 
-export const DRAG_MIME = "application/x-foundry-transformer";
+export const DRAG_MIME = "application/x-foundry-processor";
 export const DATASET_MIME = "application/x-foundry-dataset";
 
-const nodeTypes = { transformer: TransformerNode, dataset: DatasetNode };
+const nodeTypes = { processor: ProcessorNode, dataset: DatasetNode };
 const edgeTypes = { topic: TopicEdge };
 
 /** Ask manifest.py (through the backend) whether source -> target is acceptable; refuse with its message. */
@@ -67,7 +67,7 @@ export function Canvas() {
   const isValidConnection: IsValidConnection<PEdge> = useCallback(
     (c) => {
       const s = useStudio.getState();
-      return checkConnection(s.graph(), s.transformers, c.source, c.target).ok;
+      return checkConnection(s.graph(), s.processors, c.source, c.target).ok;
     },
     [],
   );
@@ -83,7 +83,7 @@ export function Canvas() {
     const [source, target] =
       state.fromHandle.type === "source" ? [state.fromNode.id, state.toNode.id] : [state.toNode.id, state.fromNode.id];
     const s = useStudio.getState();
-    const check = checkConnection(s.graph(), s.transformers, source, target);
+    const check = checkConnection(s.graph(), s.processors, source, target);
     if (!check.ok && check.kind !== "duplicate") void confirmEdge(source, target, check.reason);
   }, []);
 
@@ -109,9 +109,9 @@ export function Canvas() {
       if (!raw) return;
       e.preventDefault();
       const { id, ref } = JSON.parse(raw) as { id: string; ref: string };
-      const info = s.transformers[id];
+      const info = s.processors[id];
       if (!info || !s.meta) return;
-      s.addTransformer(info, ref, { x: p.x - 90, y: p.y - 40 });
+      s.addProcessor(info, ref, { x: p.x - 90, y: p.y - 40 });
     },
     [flow],
   );

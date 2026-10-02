@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { inputsOf, outputsOf, transformSchemas } from "../lib/rules";
+import { inputsOf, outputsOf, processorschemas } from "../lib/rules";
 import { edgeDataset } from "../lib/stages";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, versionFor } from "../lib/versions";
@@ -179,17 +179,17 @@ function NameField({ id, label, hint }: { id: string; label: string; hint: strin
   );
 }
 
-function TransformerInspector({ node }: { node: GraphNode }) {
+function ProcessorInspector({ node }: { node: GraphNode }) {
   const updateSpec = useStudio((s) => s.updateSpec);
-  const transformers = useStudio((s) => s.transformers);
+  const processors = useStudio((s) => s.processors);
   const validation = useStudio((s) => s.validation);
   const graph = useStudio((s) => s.graph);
   const meta = useStudio((s) => s.meta);
   useStudio((s) => s.revision); // re-render on wiring changes
-  const spec = node.transformer ?? {};
-  const info = findInfo(spec, Object.values(transformers));
+  const spec = node.processor ?? {};
+  const info = findInfo(spec, Object.values(processors));
   const version = versionFor(info, spec.Ref);
-  const { input, output } = transformSchemas(node, transformers);
+  const { input, output } = processorschemas(node, processors);
   const reads = inputsOf(graph(), node.id);
   const writes = outputsOf(graph(), node.id);
   const commitUrl = info && version ? info.web_url.replace(/\/-\/tree\/.*$/, `/-/commit/${version.commit}`) : null;
@@ -197,10 +197,10 @@ function TransformerInspector({ node }: { node: GraphNode }) {
   return (
     <>
       <h3>
-        Transform <span className="muted">· {node.id}</span>
+        Processor <span className="muted">· {node.id}</span>
       </h3>
       <Issues issues={issuesFor(validation, node.id)} />
-      <NameField id={node.id} label="Name" hint="Key under Transforms: in the manifest" />
+      <NameField id={node.id} label="Name" hint="Key under Processors: in the manifest" />
       <Field label="Repo">
         <input value={spec.Repo ?? ""} readOnly />
       </Field>
@@ -217,8 +217,8 @@ function TransformerInspector({ node }: { node: GraphNode }) {
             onChange={(e) => {
               const ref = e.target.value;
               updateSpec(node.id, (n) => {
-                const { Ref: _old, ...rest } = n.transformer ?? {};
-                return { ...n, transformer: ref ? { ...rest, Ref: ref } : rest };
+                const { Ref: _old, ...rest } = n.processor ?? {};
+                return { ...n, processor: ref ? { ...rest, Ref: ref } : rest };
               });
             }}
           >
@@ -243,19 +243,19 @@ function TransformerInspector({ node }: { node: GraphNode }) {
           <input value={spec.Ref ?? ""} readOnly />
         )}
       </Field>
-      <Field label="Reads" hint="From transformer.yaml at this version">
+      <Field label="Reads" hint="From processor.yaml at this version">
         <SchemaChip schema={input} />
       </Field>
-      <Field label="Writes" hint="From transformer.yaml at this version">
+      <Field label="Writes" hint="From processor.yaml at this version">
         <SchemaChip schema={output} />
       </Field>
       <Field label="In">
-        <span className="mono" data-testid="transformer-reads">
+        <span className="mono" data-testid="processor-reads">
           {reads.join(", ") || "—"}
         </span>
       </Field>
       <Field label="Out">
-        <span className="mono" data-testid="transformer-writes">
+        <span className="mono" data-testid="processor-writes">
           {writes.join(", ") || "—"}
         </span>
       </Field>
@@ -275,7 +275,7 @@ function TransformerInspector({ node }: { node: GraphNode }) {
           </a>
         </p>
       )}
-      {!info && <p className="note">Not found among the discovered transformers; its Ref and schemas can't be checked.</p>}
+      {!info && <p className="note">Not found among the discovered processors; its Ref and schemas can't be checked.</p>}
     </>
   );
 }
@@ -292,9 +292,9 @@ function DatasetInspector({ node }: { node: GraphNode }) {
   const schemas = Object.keys(catalog?.schemas ?? {});
   const info = spec?.DataSchema ? catalog?.schemas[spec.DataSchema] : undefined;
   const g = graph();
-  const transformers = g.nodes.filter((n) => n.kind === "transformer").map((n) => n.id);
-  const writers = transformers.filter((t) => outputsOf(g, t).includes(name));
-  const readers = transformers.filter((t) => inputsOf(g, t).includes(name));
+  const processors = g.nodes.filter((n) => n.kind === "processor").map((n) => n.id);
+  const writers = processors.filter((t) => outputsOf(g, t).includes(name));
+  const readers = processors.filter((t) => inputsOf(g, t).includes(name));
   const [overrides, setOverrides] = useState(!!spec?.ConnectionSettings && Object.keys(spec.ConnectionSettings).length > 0);
   const set = (patch: Partial<DatasetSpec>) =>
     updateSpec(node.id, (n) => {
@@ -385,7 +385,7 @@ function DatasetInspector({ node }: { node: GraphNode }) {
   );
 }
 
-/** A connection is a transform reading or writing a dataset. */
+/** A connection is a processor reading or writing a dataset. */
 function EdgeInspector({ id }: { id: string }) {
   const validation = useStudio((s) => s.validation);
   const edge = useStudio((s) => s.edges.find((e) => e.id === id));
@@ -395,7 +395,7 @@ function EdgeInspector({ id }: { id: string }) {
   const { source, target } = edge;
   const name = edgeDataset(source, target);
   const reading = isDatasetNode(source);
-  const transformer = reading ? target : source;
+  const processor = reading ? target : source;
   const spec = nodes.find((n) => n.id === datasetNode(name))?.data.spec.datasetSpec;
 
   return (
@@ -403,7 +403,7 @@ function EdgeInspector({ id }: { id: string }) {
       <h3>
         Connection{" "}
         <span className="muted">
-          · {transformer} {reading ? "reads" : "writes"} {name}
+          · {processor} {reading ? "reads" : "writes"} {name}
         </span>
       </h3>
       <Issues issues={issuesFor(validation, undefined, [source, target])} />
@@ -414,8 +414,8 @@ function EdgeInspector({ id }: { id: string }) {
         <SchemaChip schema={spec?.DataSchema} />
       </Field>
       {reading && (
-        <Field label="Consumer group" hint="<pipeline Name>.<transform>">
-          <input value={`${meta?.name || "<pipeline>"}.${transformer}`} readOnly className="mono" data-testid="edge-group" />
+        <Field label="Consumer group" hint="<pipeline Name>.<processor>">
+          <input value={`${meta?.name || "<pipeline>"}.${processor}`} readOnly className="mono" data-testid="edge-group" />
         </Field>
       )}
       <ProfileSettings profile={spec?.Config} />
@@ -474,7 +474,7 @@ export function Inspector() {
   let body: ReactNode;
   if (selectedNode) {
     const spec = selectedNode.data.spec;
-    body = spec.kind === "dataset" ? <DatasetInspector key={spec.id} node={spec} /> : <TransformerInspector key={spec.id} node={spec} />;
+    body = spec.kind === "dataset" ? <DatasetInspector key={spec.id} node={spec} /> : <ProcessorInspector key={spec.id} node={spec} />;
   } else if (selectedEdge) {
     body = <EdgeInspector id={selectedEdge.id} />;
   } else {

@@ -23,10 +23,10 @@ def dataset_node(name: str) -> str:
 
 
 # The "where" prefixes manifest.py puts on its messages.
-_IN_RE = re.compile(r"^Transforms\.([^.:\s]+)\.In: (?:no dataset '([^']+)'|(\S+) carries)")
-_OUT_RE = re.compile(r"^Transforms\.([^.:\s]+)\.Out: (?:no dataset '([^']+)'|\S+ writes \S+ but (\S+) carries)")
-_CYCLE_RE = re.compile(r"^Transforms: cycle among (.+)$")
-_TRANSFORM_RE = re.compile(r"^Transforms\.([^.:\s]+)(?:\.([A-Za-z]+))?:")
+_IN_RE = re.compile(r"^Processors\.([^.:\s]+)\.In: (?:no dataset '([^']+)'|(\S+) carries)")
+_OUT_RE = re.compile(r"^Processors\.([^.:\s]+)\.Out: (?:no dataset '([^']+)'|\S+ writes \S+ but (\S+) carries)")
+_CYCLE_RE = re.compile(r"^Processors: cycle among (.+)$")
+_PROCESSOR_RE = re.compile(r"^Processors\.([^.:\s]+)(?:\.([A-Za-z]+))?:")
 _DATASET_RE = re.compile(r"^DataSets\.(.+?)(?:\.(Type|Config|DataSchema|Topic|ConnectionSettings))?: ")
 
 
@@ -45,7 +45,7 @@ def locate(message: str) -> dict:
         issue["field"] = "Out"
     elif m := _CYCLE_RE.match(message):
         issue["nodes"] = [n.strip() for n in m.group(1).split(",")]
-    elif m := _TRANSFORM_RE.match(message):
+    elif m := _PROCESSOR_RE.match(message):
         issue["node"] = m.group(1)
         issue["field"] = m.group(2)
     elif m := _DATASET_RE.match(message):

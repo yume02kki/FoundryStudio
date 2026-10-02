@@ -2,9 +2,9 @@
 
 The graph is written to a manifest exactly as Save would write it and handed to check(),
 with the configs repo's profiles staged in a temporary checkout, its schema names, and each
-transform's in/out schemas from its discovered transformer.yaml at its Ref.
+processor's in/out schemas from its discovered processor.yaml at its Ref.
 Errors are only *located* here (attached to the node or edge they name), never produced;
-the one rule added is the canvas's own: a transform has a single In and a single Out.
+the one rule added is the canvas's own: a processor has a single In and a single Out.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from pathlib import Path
 
 import yaml
 
-from .discovery import TransformerInfo
+from .discovery import ProcessorInfo
 from .foundry import Foundry, dataset_node
 from .manifest import graph_to_manifest, wiring
 from .sources import Sources
@@ -28,20 +28,20 @@ def _norm_repo(url: str | None) -> str:
     return (url or "").strip().lower().removesuffix("/").removesuffix(".git")
 
 
-def find_info(spec: dict, infos: Iterable[TransformerInfo]) -> TransformerInfo | None:
-    """The discovered transformer a manifest entry runs (same repo and folder)."""
+def find_info(spec: dict, infos: Iterable[ProcessorInfo]) -> ProcessorInfo | None:
+    """The discovered processor a manifest entry runs (same repo and folder)."""
     repo, path = _norm_repo(spec.get("Repo")), str(spec.get("Path") or "").strip("/")
     return next((i for i in infos if _norm_repo(i.repo) == repo and i.path == path), None)
 
 
-def declarations(graph: dict, infos: Iterable[TransformerInfo]) -> dict[str, tuple[str | None, str | None]]:
-    """Each transform's (in, out) from transformer.yaml at its Ref (no Ref: the default branch)."""
+def declarations(graph: dict, infos: Iterable[ProcessorInfo]) -> dict[str, tuple[str | None, str | None]]:
+    """Each processor's (in, out) from processor.yaml at its Ref (no Ref: the default branch)."""
     infos = list(infos)
     out = {}
     for n in graph.get("nodes", []):
-        if n.get("kind") != "transformer":
+        if n.get("kind") != "processor":
             continue
-        spec = n.get("transformer") or {}
+        spec = n.get("processor") or {}
         info = find_info(spec, infos)
         if not info:
             continue
@@ -66,8 +66,8 @@ class Validator:
                                    ("Out", w["Outputs"], lambda d: [t, dataset_node(d)])):
                 verb = "reads" if role == "In" else "writes"
                 for extra in ds[1:]:
-                    issues.append({"message": f"Transforms.{t}.{role}: {t} {verb} {' and '.join(ds)}; "
-                                              f"a transform {verb} one dataset",
+                    issues.append({"message": f"Processors.{t}.{role}: {t} {verb} {' and '.join(ds)}; "
+                                              f"a processor {verb} one dataset",
                                    "node": None, "edge": edge(extra), "nodes": edge(extra), "field": role})
         return issues
 
@@ -88,11 +88,11 @@ class Validator:
             issues.insert(0, {"message": f"Configs: can't read the connection profiles: {configs_error}",
                               "node": None, "edge": None, "nodes": [], "field": "Configs"})
         datasets = manifest.get("DataSets") or {}
-        transforms = manifest.get("Transforms") or {}
-        written = {s.get("Out") for s in transforms.values() if isinstance(s, dict)}
-        read = {s.get("In") for s in transforms.values() if isinstance(s, dict)}
+        processors = manifest.get("Processors") or {}
+        written = {s.get("Out") for s in processors.values() if isinstance(s, dict)}
+        read = {s.get("In") for s in processors.values() if isinstance(s, dict)}
         result = {"ok": not issues, "errors": issues, "manifest": manifest_text,
-                  "summary": f"{len(transforms)} transforms, {len(datasets)} datasets",
+                  "summary": f"{len(processors)} processors, {len(datasets)} datasets",
                   "sources": sorted(d for d in datasets if d in read and d not in written),
                   "sinks": sorted(d for d in datasets if d in written and d not in read)}
         return result
@@ -100,39 +100,39 @@ class Validator:
     def check_edge(self, graph: dict, source: str, target: str, configs: dict | None, schemas: dict | None,
                    decls: dict) -> dict:
         """Would adding source -> target be accepted? check() decides; we only add the canvas rules
-        that come from the manifest's shape (an edge is the transform's In or its Out)."""
+        that come from the manifest's shape (an edge is the processor's In or its Out)."""
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
         s, t = nodes.get(source), nodes.get(target)
         if not s or not t:
             return {"ok": False, "message": "unknown node"}
         kinds = (s.get("kind"), t.get("kind"))
-        if kinds == ("transformer", "transformer"):
-            return {"ok": False, "message": f"{source} -> {target}: transforms connect through a dataset; "
+        if kinds == ("processor", "processor"):
+            return {"ok": False, "message": f"{source} -> {target}: processors connect through a dataset; "
                                             "drop a dataset between them"}
         if kinds == ("dataset", "dataset"):
-            return {"ok": False, "message": "datasets connect through a transform"}
+            return {"ok": False, "message": "datasets connect through a processor"}
         w = wiring(graph)
-        if kinds == ("dataset", "transformer") and w[target]["Inputs"]:
-            return {"ok": False, "message": f"Transforms.{target}.In: {target} already reads "
-                                            f"{w[target]['Inputs'][0]}; a transform reads one dataset"}
-        if kinds == ("transformer", "dataset") and w[source]["Outputs"]:
-            return {"ok": False, "message": f"Transforms.{source}.Out: {source} already writes "
-                                            f"{w[source]['Outputs'][0]}; a transform writes one dataset"}
+        if kinds == ("dataset", "processor") and w[target]["Inputs"]:
+            return {"ok": False, "message": f"Processors.{target}.In: {target} already reads "
+                                            f"{w[target]['Inputs'][0]}; a processor reads one dataset"}
+        if kinds == ("processor", "dataset") and w[source]["Outputs"]:
+            return {"ok": False, "message": f"Processors.{source}.Out: {source} already writes "
+                                            f"{w[source]['Outputs'][0]}; a processor writes one dataset"}
 
         edge = [source, target]
         before = {e["message"] for e in self.validate(graph, configs, schemas, decls)["errors"]}
         after = self.validate({**graph, "edges": [*graph.get("edges", []), {"source": source, "target": target}]},
                               configs, schemas, decls)
         mine = [e for e in after["errors"] if e["edge"] == edge
-                or (e["message"].startswith(("Transforms: cycle", f"Transforms.{source}: reads and writes",
-                                             f"Transforms.{target}: reads and writes"))
+                or (e["message"].startswith(("Processors: cycle", f"Processors.{source}: reads and writes",
+                                             f"Processors.{target}: reads and writes"))
                     and e["message"] not in before)]
         if mine:
             return {"ok": False, "message": mine[0]["message"], "errors": mine}
         return {"ok": True, "message": None}
 
     def endpoint(self, graph: dict, node: str, configs: dict | None) -> dict:
-        """The dataset a node is (or, for a transform, writes), and how to connect to it."""
+        """The dataset a node is (or, for a processor, writes), and how to connect to it."""
         nodes = {n["id"]: n for n in graph.get("nodes", [])}
         if node not in nodes:
             raise ValueError(f"unknown node {node!r}")
