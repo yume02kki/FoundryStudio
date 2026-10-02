@@ -116,7 +116,7 @@ def processor_files(name: str, input: str, output: str, version: str = "1.0.0",
         f"{name}.csproj": (
             '<Project Sdk="Microsoft.NET.Sdk.Worker">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n'
             f"    <Version>{version}</Version>\n  </PropertyGroup>\n  <ItemGroup>\n"
-            '    <PackageReference Include="Foundry.Common.Processors" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
+            '    <PackageReference Include="Foundry.Common.Configuration" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
         "Program.cs": (f"using Foundry.Common.Models;\n\n// Demo stand-in: {input} -> {output}.\n"
                        f"static {output} Processor({input} p) => new() {{ Guid = p.Guid }};\n"),
     }
