@@ -85,8 +85,8 @@ class Discovery:
             return None
         value = str(value)
         known = self.known_schemas() if callable(self.known_schemas) else self.known_schemas
-        if value not in known:
-            warnings.append(f"{where}: {value!r} is not a schema in the catalog")
+        if known and value not in known:  # empty: the schemas couldn't be read, so don't flag everything
+            warnings.append(f"{where}: {value!r} is not a schema in foundry-models")
         return value
 
     async def declaration(self, project: str, path: str, commit: str) -> Decl:

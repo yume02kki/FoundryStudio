@@ -18,7 +18,7 @@ function usePortState(nodeId: string, port: "in" | "out"): PortState {
   if (fromType === "target" && port === "in") return "idle";
   const s = useStudio.getState();
   const [a, b] = fromType === "source" ? [from, nodeId] : [nodeId, from];
-  return checkConnection(s.graph(), s.catalog, a, b).ok ? "compatible" : "incompatible";
+  return checkConnection(s.graph(), s.transformers, a, b).ok ? "compatible" : "incompatible";
 }
 
 function Port({ nodeId, port, schema, label = true }: { nodeId: string; port: "in" | "out"; schema?: string; label?: boolean }) {
@@ -49,7 +49,6 @@ function TransformerNodeView({ id, data, selected }: NodeProps<PNode>) {
   const validation = useStudio((s) => s.validation);
   const focus = useStudio((s) => s.focus);
   const transformers = useStudio((s) => s.transformers);
-  const catalog = useStudio((s) => s.catalog);
   const errors = issuesFor(validation, id);
   const focused = focus?.nodes.includes(id);
 
@@ -65,7 +64,7 @@ function TransformerNodeView({ id, data, selected }: NodeProps<PNode>) {
       title={errors.map((e) => e.message).join("\n") || undefined}
     >
       <div className="pnode-head">
-        <span className="pnode-kind">⚙ Transformer</span>
+        <span className="pnode-kind">⚙ Transform</span>
         {info && info.warnings.length > 0 && (
           <span className="badge badge-warn" title={info.warnings.join("\n")}>
             ⚠
@@ -94,23 +93,22 @@ function TransformerNodeView({ id, data, selected }: NodeProps<PNode>) {
       <div className="pnode-sub">{subtitle}</div>
       <NodeActivity node={id} />
       <div className="pnode-ports">
-        <Port nodeId={id} port="in" schema={expects(spec, catalog)} />
-        <Port nodeId={id} port="out" schema={emits(spec, catalog)} />
+        <Port nodeId={id} port="in" schema={expects(spec, transformers)} />
+        <Port nodeId={id} port="out" schema={emits(spec, transformers)} />
       </div>
       {errors.length > 0 && <div className="pnode-errors">{errors.length} issue{errors.length > 1 ? "s" : ""}</div>}
     </div>
   );
 }
 
-/** A registered topic from the catalog: transformers write into its left side and read from its right. */
+/** One of the pipeline's DataSets (a Kafka topic): transforms write into its left side and read from its right. */
 function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
   const name = data.spec.dataset ?? id;
   const validation = useStudio((s) => s.validation);
   const focus = useStudio((s) => s.focus);
-  const catalog = useStudio((s) => s.catalog);
   const errors = issuesFor(validation, id);
-  const spec = catalog?.datasets[name];
-  const schema = datasetSchema(catalog, name);
+  const spec = data.spec.datasetSpec;
+  const schema = datasetSchema(data.spec);
   const color = schemaColor(schema);
 
   return (
@@ -118,17 +116,20 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
       className={`pnode pnode-dataset${selected ? " selected" : ""}${errors.length ? " has-error" : ""}${focus?.nodes.includes(id) ? " focused" : ""}${spec ? "" : " missing"}`}
       data-testid={`node-${id}`}
       style={{ borderLeftColor: color }}
-      title={errors.map((e) => e.message).join("\n") || spec?.Description || undefined}
+      title={errors.map((e) => e.message).join("\n") || (spec?.Topic ? `Topic ${spec.Topic}` : undefined)}
     >
       <Port nodeId={id} port="in" schema={schema} label={false} />
       <div className="dataset-body">
         <div className="pnode-head">
           <span className="pnode-kind">≋ Dataset</span>
-          <span className="dataset-cluster" data-testid={`cluster-${name}`}>
-            {spec ? spec.Cluster : "not in catalog"}
+          <span className="dataset-cluster" data-testid={`profile-${name}`}>
+            {spec ? spec.Config ?? "inline" : "not defined"}
           </span>
         </div>
         <div className="pnode-title mono">{name}</div>
+        <div className="dataset-topic mono muted" data-testid={`topic-${name}`}>
+          {spec?.Topic ?? "no topic"}
+        </div>
         <div className="dataset-schema" style={{ color }} data-testid={`schema-${name}`}>
           {schema ?? "?"}
         </div>

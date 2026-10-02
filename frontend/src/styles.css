@@ -1765,3 +1765,38 @@ button.chip {
   cursor: pointer;
   font: inherit;
 }
+
+/* Dataset node: its topic under the name. */
+.dataset-topic {
+  padding: 0 8px;
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Read-only key/value table (a connection profile's settings). */
+.kv {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+
+.kv td {
+  padding: 2px 4px;
+}
+
+.field-input input.invalid {
+  border-color: var(--error);
+}
+
+.link-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent, #4fa3ff);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}

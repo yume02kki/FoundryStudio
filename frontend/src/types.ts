@@ -1,8 +1,8 @@
 // Shapes shared with the backend; see backend/foundry_studio/manifest.py.
 //
-// On the canvas, transformers and datasets (registered Kafka topics from the shared
-// catalog) are both nodes. An edge dataset -> transformer is one of the transformer's
-// Inputs; transformer -> dataset is its Output.
+// On the canvas, transforms and the pipeline's datasets (its DataSets: Kafka topics) are both
+// nodes. An edge dataset -> transform is the transform's In; transform -> dataset its Out.
+// A transform has one of each.
 
 export const DATASET = "dataset:";
 export const datasetNode = (name: string) => `${DATASET}${name}`;
@@ -11,13 +11,21 @@ export const datasetName = (id: string) => (isDatasetNode(id) ? id.slice(DATASET
 
 export type ConnectionSettings = Record<string, string | number | boolean>;
 
+/** A Transforms: entry, without In/Out (those are its edges). Its schemas come from transformer.yaml at its Ref. */
 export interface TransformerSpec {
   Repo?: string;
   Path?: string;
   Ref?: string;
-  IN?: string;
-  OUT?: string;
-  ConsumerGroup?: string;
+  [key: string]: unknown;
+}
+
+/** A DataSets: entry. Config names a connection profile; ConnectionSettings override it key by key. */
+export interface DatasetSpec {
+  Type?: string;
+  Config?: string;
+  DataSchema?: string;
+  Topic?: string;
+  ConnectionSettings?: ConnectionSettings;
   [key: string]: unknown;
 }
 
@@ -27,7 +35,8 @@ export interface GraphNode {
   id: string;
   kind: NodeKind;
   transformer?: TransformerSpec;
-  dataset?: string; // the topic's name, for a dataset node
+  dataset?: string; // its key under DataSets, for a dataset node
+  datasetSpec?: DatasetSpec | null; // null: used by a transform but not defined under DataSets
 }
 
 export interface GraphEdge {
@@ -37,19 +46,11 @@ export interface GraphEdge {
 
 export interface Graph {
   name: string;
-  catalog: string; // the manifest's Catalog: path, relative to the manifest
-  consumerGroup: string;
+  configs: { Repo?: string; Ref?: string }; // where the connection profiles come from
   nodes: GraphNode[];
   edges: GraphEdge[];
   extra?: Record<string, unknown>;
   warnings?: string[];
-}
-
-export interface DatasetSpec {
-  Cluster?: string;
-  Schema?: string;
-  Description?: string;
-  [key: string]: unknown;
 }
 
 export interface SchemaInfo {
@@ -58,13 +59,12 @@ export interface SchemaInfo {
   fields: Record<string, string>;
 }
 
-/** The shared catalog (catalog.yaml): clusters, schemas, and registered topics (datasets). */
+/** What manifests refer to (read-only): connection profiles from the configs repo, schemas from foundry-models. */
 export interface Catalog {
-  clusters: Record<string, ConnectionSettings>;
-  schemas: Record<string, string>;
-  datasets: Record<string, DatasetSpec>;
-  extra?: Record<string, unknown>;
-  schemaInfo?: Record<string, SchemaInfo>;
+  profiles: Record<string, ConnectionSettings>; // "kafka/prod" -> its ConnectionSettings
+  schemas: Record<string, SchemaInfo>;
+  configs: { repo: string; ref: string; commit: string } | null;
+  errors: { configs?: string; schemas?: string };
 }
 
 export interface Layout {
@@ -135,46 +135,25 @@ export interface Health {
   gitlabUrl: string;
   tokenConfigured: boolean;
   webhookConfigured: boolean;
-  foundryCommit: string | null;
+  scriptsCommit: string | null;
   workspace: string;
-  deployTarget: string | null;
+  configsRepo: string;
+  modelsProject: string;
   transformerProjects: string[];
   watcher: WatcherStatus;
 }
 
-/** One recorded deploy (deploy.py's history), or the pipeline's current state. */
-export interface DeployRecord {
-  id: string;
-  action: "deploy" | "rollback" | "stop";
-  at: string;
-  by: string;
-  from?: string;
-  digest?: string;
-  project?: string;
-  runner?: string;
-  graph?: string[];
-  transformers?: Record<string, { commit: string; ref: string; image: string }>;
-}
-
 export interface PipelineListing {
+  folder: string;
   name: string;
-  deploy: DeployRecord | null;
 }
 
-export interface DeployService {
-  service: string;
-  state: string;
-  status: string;
-  image: string;
-}
-
-export interface DeployHistory {
-  current: DeployRecord | null;
-  history: DeployRecord[];
-  runner: string;
-  project: string;
-  services: DeployService[];
-  servicesError: string | null;
+/** A DataSets entry of some pipeline in the workspace. */
+export interface WorkspaceDataset {
+  folder: string;
+  pipeline: string;
+  name: string;
+  spec: DatasetSpec;
 }
 
 export interface LoadedPipeline {
@@ -182,12 +161,8 @@ export interface LoadedPipeline {
   layout: Layout | null;
   manifest: string;
   path: string;
+  folder: string;
 }
-
-export type DeployEvent =
-  | { type: "log"; line: string }
-  | { type: "result"; status: "deployed" | "unchanged" | "rolled-back" | "stopped"; id?: string; from?: string; project?: string }
-  | { type: "error"; status: number; message: string; errors: Issue[] };
 
 export interface FeedMessage {
   partition: number;

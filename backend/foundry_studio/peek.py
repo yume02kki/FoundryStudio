@@ -356,7 +356,7 @@ async def kafka_feed(cfg: dict, topic: str, checker: FormatChecker, stop: asynci
 
 DEMO_EPOCH = 1_790_000_000.0
 DEMO_INTERVAL = 1.5
-DEMO_STAGE_DELAY = {"XmlPackets": 0.0, "EncodedPackets": 0.25, "Packets": 0.5}
+DEMO_STAGE_DELAY = {"XmlPackets": 0.0, "Packets": 0.25, "EnrichedPackets": 0.5}
 _TEXTS = ["Hello, world!", "ping", "temperature=21.5", "door opened", "heartbeat"]
 
 
@@ -374,20 +374,23 @@ def demo_record(n: int) -> dict:
 
 
 def demo_value(schema: str | None, rec: dict) -> bytes | None:
-    """Record n as it appears on a topic of this schema, or None if the topic doesn't carry it."""
+    """Record n as it appears on a topic of this schema, or None if the topic doesn't carry it.
+
+    As in PacketPipeline: XML in, JSON with the payload still base64 (Packets), then the payload
+    decoded and an ISP added (EnrichedPackets)."""
     encoded = base64.b64encode(rec["data"]).decode()
     if schema == "XmlPackets":
-        return (f"<packet><guid>{rec['guid']}</guid><data>{encoded}</data><time_sent>{rec['time_sent']}</time_sent>"
-                f"<host_ip>{rec['host_ip']}</host_ip><target_ip>{rec['target_ip']}</target_ip></packet>").encode()
-    if schema == "Packets":
+        return (f"<xml_packets><guid>{rec['guid']}</guid><data>{encoded}</data><time_sent>{rec['time_sent']}</time_sent>"
+                f"<host_ip>{rec['host_ip']}</host_ip><target_ip>{rec['target_ip']}</target_ip></xml_packets>").encode()
+    doc = {"guid": rec["guid"], "data": encoded}
+    if schema == "EnrichedPackets":
         try:
-            data = rec["data"].decode("utf-8")
+            doc["data"] = rec["data"].decode("utf-8")
         except UnicodeDecodeError:
             return None  # dropped by the decoder
-    else:
-        data = encoded
-    return json.dumps({"guid": rec["guid"], "data": data, "time_sent": rec["time_sent"], "host_ip": rec["host_ip"],
-                       "target_ip": rec["target_ip"]}, separators=(",", ":")).encode()
+        doc["ISP"] = "Example ISP" if rec["host_ip"].endswith(("2", "4", "6", "8")) else "unknown"
+    doc.update(time_sent=rec["time_sent"], host_ip=rec["host_ip"], target_ip=rec["target_ip"])
+    return json.dumps(doc, separators=(",", ":")).encode()
 
 
 async def demo_feed(schema: str | None, topic: str, checker: FormatChecker, stop: asyncio.Event,

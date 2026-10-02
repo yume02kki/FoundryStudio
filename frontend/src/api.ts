@@ -1,7 +1,5 @@
 import type {
   Catalog,
-  DeployEvent,
-  DeployHistory,
   FeedMessage,
   Graph,
   Health,
@@ -12,6 +10,7 @@ import type {
   TransformerInfo,
   ValidationResult,
   WatcherStatus,
+  WorkspaceDataset,
 } from "./types";
 
 export class ApiError extends Error {
@@ -47,27 +46,33 @@ async function call<T>(path: string, init?: RequestInit & { json?: unknown }): P
   return res.json() as Promise<T>;
 }
 
-const pipe = (name: string) => `api/pipelines/${encodeURIComponent(name)}`;
+const pipe = (folder: string) => `api/pipelines/${encodeURIComponent(folder)}`;
+
+type Saved = { path: string; layout: string; folder: string };
 
 export const api = {
   health: () => call<Health>("api/health"),
   transformers: () => call<{ transformers: TransformerInfo[]; status: WatcherStatus }>("api/transformers"),
   template: () => call<Graph>("api/template"),
-  catalog: () => call<Catalog>("api/catalog"),
-  saveCatalog: (catalog: Catalog) =>
-    call<{ path: string; catalog: Catalog }>("api/catalog", { method: "PUT", json: { catalog } }),
+  /** Profiles from the manifest's Configs repo (the default one without), and the schemas. */
+  catalog: (configs: Graph["configs"] = {}) => {
+    const q = new URLSearchParams();
+    if (configs.Repo) q.set("repo", configs.Repo);
+    if (configs.Ref) q.set("ref", configs.Ref);
+    return call<Catalog>(`api/catalog?${q}`);
+  },
   pipelines: () => call<{ pipelines: PipelineListing[] }>("api/pipelines"),
-  load: (name: string) => call<LoadedPipeline>(pipe(name)),
-  save: (graph: Graph, layout: Layout) =>
-    call<{ path: string; layout: string }>(pipe(graph.name), { method: "PUT", json: { graph, layout } }),
-  validate: (graph: Graph, catalog: Catalog | null, signal?: AbortSignal) =>
-    call<ValidationResult>("api/validate", { method: "POST", json: { graph, catalog }, signal }),
-  checkEdge: (graph: Graph, catalog: Catalog | null, source: string, target: string) =>
-    call<{ ok: boolean; message: string | null }>("api/check-edge", {
-      method: "POST",
-      json: { graph, catalog, source, target },
-    }),
-  deploys: (name: string) => call<DeployHistory>(`${pipe(name)}/deploys`),
+  datasets: () => call<{ datasets: WorkspaceDataset[] }>("api/datasets"),
+  load: (folder: string) => call<LoadedPipeline>(pipe(folder)),
+  /** Save to the pipeline's folder, or (folder null) create a new folder named after it. */
+  save: (folder: string | null, graph: Graph, layout: Layout) =>
+    folder
+      ? call<Saved>(pipe(folder), { method: "PUT", json: { graph, layout } })
+      : call<Saved>("api/pipelines", { method: "POST", json: { graph, layout } }),
+  validate: (graph: Graph, signal?: AbortSignal) =>
+    call<ValidationResult>("api/validate", { method: "POST", json: { graph }, signal }),
+  checkEdge: (graph: Graph, source: string, target: string) =>
+    call<{ ok: boolean; message: string | null }>("api/check-edge", { method: "POST", json: { graph, source, target } }),
 };
 
 /** Read Server-Sent Events from a POST response until the stream ends. */
@@ -90,31 +95,6 @@ async function readEvents<T>(res: Response, onEvent: (e: T) => void) {
       if (data) onEvent(JSON.parse(data) as T);
     }
   }
-}
-
-/**
- * Run a deploy.py operation on a saved pipeline (deploy, rollback, stop), streaming its log.
- * Resolves with the final result event (or error event).
- */
-export async function operate(
-  name: string,
-  op: "deploy" | "rollback" | "stop",
-  onLog: (line: string) => void,
-  body?: unknown,
-): Promise<Extract<DeployEvent, { type: "result" | "error" }>> {
-  const res = await fetch(`${pipe(name)}/${op}`, {
-    method: "POST",
-    headers: body ? { "Content-Type": "application/json" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok || !res.body) throw await errorOf(res);
-  let last: Extract<DeployEvent, { type: "result" | "error" }> | null = null;
-  await readEvents<DeployEvent>(res, (e) => {
-    if (e.type === "log") onLog(e.line);
-    else last = e;
-  });
-  if (!last) throw new ApiError(0, "the deploy stream ended without a result");
-  return last;
 }
 
 export type PeekEvent =

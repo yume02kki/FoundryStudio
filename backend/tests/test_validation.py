@@ -1,115 +1,136 @@
-"""Validation passthrough: the API reports exactly what `deploy.py validate` reports."""
+"""Validation goes through manifest.py's check(), and errors land on the node or edge they name."""
 
 from __future__ import annotations
 
-import shutil
+import copy
 import subprocess
 import sys
 
 import pytest
-import yaml
+from fastapi.testclient import TestClient
 
+from foundry_studio import demo
+from foundry_studio.app import create_app
 from foundry_studio.foundry import locate
-from foundry_studio.manifest import manifest_to_graph
-from foundry_studio.validation import Validator, stage
+from foundry_studio.manifest import graph_to_manifest, manifest_to_graph
 
-from .conftest import FOUNDRY_DIR
-
-SWPIPELINE = (FOUNDRY_DIR / "PipelineManifest.yaml").read_text()
-CATALOG = FOUNDRY_DIR / "catalog.yaml"
+from .conftest import SCRIPTS_DIR
 
 
-def cli_errors(graph, catalog, tmp_path) -> list[str]:
-    manifest = stage(graph, catalog, tmp_path / "cli")
-    res = subprocess.run([sys.executable, str(FOUNDRY_DIR / "deploy.py"), "validate", str(manifest)],
-                         capture_output=True, text=True)
-    return [line[len("  - "):] for line in res.stderr.splitlines() if line.startswith("  - ")]
+@pytest.fixture
+def client(services):
+    with TestClient(create_app(services)) as c:
+        c.get("/api/transformers")  # waits for discovery
+        yield c
 
 
-def edit(text: str, old: str, new: str) -> str:
-    assert old in text, old
-    return text.replace(old, new)
+def graph():
+    return manifest_to_graph(demo.MANIFEST)
 
 
-CASES = {
-    "type mismatch": edit(SWPIPELINE, "Inputs: [SWpipeline.XmlToJson.out]", "Inputs: [raw.xml]"),
-    "output mismatch": edit(SWPIPELINE, "Output: SWpipeline.XmlToJson.out", "Output: packets.decoded"),
-    "unknown dataset": edit(SWPIPELINE, "Inputs: [raw.xml]", "Inputs: [raw.json]"),
-    "bad consumer group": edit(SWPIPELINE, "Inputs: [SWpipeline.XmlToJson.out]",
-                             "Inputs: [SWpipeline.XmlToJson.out]\n    ConsumerGroup: bad name"),
-    "cycle": edit(edit(SWPIPELINE, "Inputs: [raw.xml]", "Inputs: [packets.decoded]"),
-                  "IN: XmlPackets", "IN: Packets"),
-    "missing output": edit(SWPIPELINE, "    Output: packets.decoded\n", ""),
-    "no catalog": edit(SWPIPELINE, "Catalog: catalog.yaml", "Catalog: nope.yaml"),
-}
+def dataset(g, name):
+    return next(n for n in g["nodes"] if n["id"] == f"dataset:{name}")
 
 
-@pytest.mark.parametrize("case", CASES)
-def test_errors_match_the_cli(case, foundry, tmp_path):
-    graph = manifest_to_graph(CASES[case])
-    if case == "no catalog":
-        graph["catalog"] = "nope.yaml"
-    catalog = CATALOG if case != "no catalog" else tmp_path / "missing.yaml"
-    expected = cli_errors(graph, catalog, tmp_path)
-    assert expected, "the case should be invalid"
-    result = Validator(foundry).validate(graph, catalog)
-    assert not result["ok"]
-    assert [e["message"] for e in result["errors"]] == expected
+def validate(client, g) -> list[dict]:
+    return client.post("/api/validate", json={"graph": g}).json()["errors"]
 
 
-def test_valid_pipeline_summary(foundry):
-    r = Validator(foundry).validate(manifest_to_graph(SWPIPELINE), CATALOG)
-    assert r["ok"] and r["summary"].startswith("SWpipeline: OK — 2 transformers, 3 datasets")
-    assert (r["sources"], r["sinks"]) == (["raw.xml"], ["packets.decoded"])
+def test_demo_pipeline_is_valid(client):
+    r = client.post("/api/validate", json={"graph": graph()}).json()
+    assert r["ok"] and r["errors"] == []
+    assert r["summary"] == "3 transforms, 3 datasets"
+    assert (r["sources"], r["sinks"]) == (["Input"], ["Output"])
+    assert r["manifest"] == demo.MANIFEST
 
 
-def test_errors_are_located():
-    assert locate("Transformers.Base64Decoder.Inputs: raw.xml carries XmlPackets but Base64Decoder expects "
-                  "EncodedPackets")["edge"] == ["dataset:raw.xml", "Base64Decoder"]
-    assert locate("Transformers.XmlToJson.Output: XmlToJson emits EncodedPackets but packets.decoded carries "
-                  "Packets")["edge"] == ["XmlToJson", "dataset:packets.decoded"]
-    assert locate("Transformers.A.Inputs: unknown dataset 'x.y'; register the topic and add it to the catalog's "
-                  "Datasets")["edge"] == ["dataset:x.y", "A"]
-    assert locate("Transformers.A: missing 'Repo'")["node"] == "A"
-    assert locate("Transformers: cycle detected among A, B")["nodes"] == ["A", "B"]
-    assert locate("Datasets.raw.xml.Cluster: unknown cluster 'x' (defined: a)")["node"] == "dataset:raw.xml"
-    assert locate("Clusters.core: missing 'Brokers'")["field"] == "Clusters.core"
+def test_errors_are_located(client):
+    g = graph()
+    dataset(g, "Output")["datasetSpec"]["DataSchema"] = "Nope"
+    dataset(g, "ConvertedPackets")["datasetSpec"]["Config"] = "kafka/missing"
+    del dataset(g, "Input")["datasetSpec"]["Topic"]
+    errors = {e["message"]: e for e in validate(client, g)}
+    assert errors["DataSets.Output.DataSchema: unknown schema 'Nope' (known: EnrichedPackets, Packets, XmlPackets)"][
+        "node"] == "dataset:Output"
+    assert errors["DataSets.ConvertedPackets: Config 'kafka/missing' not found (known: kafka/load, kafka/prod)"][
+        "node"] == "dataset:ConvertedPackets"
+    assert errors["DataSets.Input: missing Topic"]["node"] == "dataset:Input"
 
 
-def test_check_edge(foundry):
-    v = Validator(foundry)
-    g = manifest_to_graph(SWPIPELINE)
-    r = v.check_edge(g, "dataset:raw.xml", "Base64Decoder", CATALOG)
-    assert r["message"] == "Transformers.Base64Decoder.Inputs: raw.xml carries XmlPackets but Base64Decoder " \
-                           "expects EncodedPackets"
-    # A second output is fine as long as the schema matches.
-    assert "emits EncodedPackets but packets.decoded carries Packets" in \
-        v.check_edge(g, "XmlToJson", "dataset:packets.decoded", CATALOG)["message"]
-    assert "through a dataset" in v.check_edge(g, "XmlToJson", "Base64Decoder", CATALOG)["message"]
-    g["edges"] = [e for e in g["edges"] if e["source"] != "Base64Decoder"]
-    assert v.check_edge(g, "Base64Decoder", "dataset:packets.decoded", CATALOG)["ok"]
+def test_schema_mismatch_lands_on_the_edge(client):
+    g = graph()
+    g["edges"] = [e for e in g["edges"] if e["target"] != "Decode"] + [{"source": "dataset:Input", "target": "Decode"}]
+    [e] = validate(client, g)
+    assert e["message"] == "Transforms.Decode.In: Input carries XmlPackets but Decode reads Packets"
+    assert e["edge"] == ["dataset:Input", "Decode"]
 
 
-def test_catalog_validation(foundry, tmp_path):
-    cat_dir = tmp_path / "ws"
-    shutil.copytree(FOUNDRY_DIR / "schemas", cat_dir / "schemas")
-    shutil.copyfile(CATALOG, cat_dir / "catalog.yaml")
-    from foundry_studio.manifest import parse_catalog
+def test_pinned_ref_uses_that_versions_transformer_yaml(client, demo_root):
+    # A new release of Decode that reads XmlPackets: pinning it makes the existing wire wrong.
+    repo = demo_root / demo.ENRICHERS / "decodingtransformer"
+    (repo / "transformer.yaml").write_text("name: Decode\nin: XmlPackets\nout: EnrichedPackets\n")
+    demo.tag(demo_root, "decodingtransformer", "v2.0.0")
+    client.app.state.services.watcher.full_rescan_interval = 0
+    client.portal.call(client.app.state.services.watcher.poll_once)
+    g = graph()
+    next(n for n in g["nodes"] if n["id"] == "Decode")["transformer"]["Ref"] = "v2.0.0"
+    [e] = validate(client, g)
+    assert e["message"] == "Transforms.Decode.In: ConvertedPackets carries Packets but Decode reads XmlPackets"
+    del next(n for n in g["nodes"] if n["id"] == "Decode")["transformer"]["Ref"]
+    assert validate(client, g)  # the default branch has the new transformer.yaml too
+    next(n for n in g["nodes"] if n["id"] == "Decode")["transformer"]["Ref"] = "v1.0.0"
+    assert validate(client, g) == []
 
-    cat = parse_catalog(CATALOG.read_text())
-    v = Validator(foundry)
-    assert v.validate_catalog(cat, cat_dir / "catalog.yaml")["ok"]
-    cat["datasets"]["x.y"] = {"Cluster": "nowhere", "Schema": "Packets"}
-    r = v.validate_catalog(cat, cat_dir / "catalog.yaml")
-    assert not r["ok"] and r["errors"][0]["node"] == "dataset:x.y"
+
+def test_second_input_is_reported(client):
+    g = graph()
+    g["edges"].append({"source": "dataset:Input", "target": "Isp"})
+    messages = [e["message"] for e in validate(client, g)]
+    assert "Transforms.Isp.In: Isp reads ConvertedPackets and Input; a transform reads one dataset" in messages
 
 
-def test_endpoint(foundry):
-    from foundry_studio.manifest import parse_catalog
+def test_check_edge(client):
+    g = graph()
+    check = lambda s, t, gr=g: client.post("/api/check-edge", json={"graph": gr, "source": s, "target": t}).json()  # noqa: E731
+    assert check("Decode", "Isp")["message"].endswith("transforms connect through a dataset; drop a dataset between them")
+    assert check("dataset:Input", "dataset:Output")["message"] == "datasets connect through a transform"
+    assert check("dataset:Input", "Isp")["message"] == (
+        "Transforms.Isp.In: Isp already reads ConvertedPackets; a transform reads one dataset")
+    unwired = {**g, "edges": [e for e in g["edges"] if e["target"] != "Isp"]}
+    assert check("dataset:Input", "Isp", unwired)["message"] == (
+        "Transforms.Isp.In: Input carries XmlPackets but Isp reads Packets")
+    assert check("dataset:ConvertedPackets", "Isp", unwired) == {"ok": True, "message": None}
+    # Isp reading Output (which it writes) would be a self loop.
+    assert "reads and writes Output" in check("dataset:Output", "Isp", unwired)["message"]
 
-    cat = parse_catalog(CATALOG.read_text())
-    ep = Validator(foundry).endpoint(manifest_to_graph(SWPIPELINE), "XmlToJson", cat)
-    assert (ep["topic"], ep["schema"], ep["cluster"]) == ("SWpipeline.XmlToJson.out", "EncodedPackets", "internal")
-    assert ep["connection"]["Brokers"] == "kafka-internal:9092"
-    assert yaml.safe_load(CATALOG.read_text())["Datasets"]["raw.xml"]["Cluster"] == \
-        Validator(foundry).endpoint(manifest_to_graph(SWPIPELINE), "dataset:raw.xml", cat)["cluster"]
+
+def test_cli_agrees(client, demo_root, tmp_path):
+    """manifest.py validate (the CLI) and Studio report the same errors for the same manifest."""
+    g = copy.deepcopy(graph())
+    dataset(g, "Output")["datasetSpec"]["DataSchema"] = "Nope"
+    g["edges"] = [e for e in g["edges"] if e["target"] != "Decode"] + [{"source": "dataset:Input", "target": "Decode"}]
+    manifest = tmp_path / "PipelineManifest.yaml"
+    manifest.write_text(graph_to_manifest(g))
+    cli = subprocess.run(
+        [sys.executable, str(SCRIPTS_DIR / "manifest" / "manifest.py"), "validate", str(manifest),
+         "--configs", str(demo_root / demo.CONFIGS), "--models", str(demo_root / demo.MODELS)],
+        capture_output=True, text=True)
+    assert cli.returncode == 1
+    cli_errors = sorted(line.removeprefix("error: ") for line in cli.stderr.splitlines())
+    assert cli_errors == sorted(e["message"] for e in validate(client, g))
+
+
+@pytest.mark.parametrize("message, node, edge", [
+    ("Transforms.A.In: no dataset 'X'", None, ["dataset:X", "A"]),
+    ("Transforms.A.Out: A writes P but Y carries Q", None, ["A", "dataset:Y"]),
+    ("Transforms.A: missing Repo", "A", None),
+    ("DataSets.My.Set.DataSchema: unknown schema 'Q' (known: P)", "dataset:My.Set", None),
+    ("Name: required", None, None),
+])
+def test_locate(message, node, edge):
+    issue = locate(message)
+    assert (issue["node"], issue["edge"]) == (node, edge)
+
+
+def test_locate_cycle():
+    assert locate("Transforms: cycle among A, B")["nodes"] == ["A", "B"]

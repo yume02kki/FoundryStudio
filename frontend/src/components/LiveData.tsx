@@ -64,7 +64,7 @@ const graphOf = (s: ReturnType<typeof useStudio.getState>) => ({
 /**
  * While Live data is on, follows every dataset on the canvas, so the canvas shows data
  * flowing everywhere and switching between nodes is instant. Very large pipelines fall
- * back to the selected stage's datasets. Graph or catalog edits restart the feeds
+ * back to the selected stage's datasets. Graph edits restart the feeds
  * (debounced): a dataset or a connection setting may have changed. Mounted once, in App.
  */
 export function useLiveFeeds() {

@@ -14,6 +14,8 @@ import { api } from "../api";
 import { checkConnection } from "../lib/rules";
 import { ALL_COLORS } from "../lib/schemaColor";
 import { useStudio, type PEdge, type PNode } from "../store";
+import type { DatasetSpec } from "../types";
+import { placeDataset } from "./Datasets";
 import { DatasetNode, TransformerNode } from "./PipelineNode";
 import { ArrowMarkers, ConnectionLine, DragTooltip, TopicEdge } from "./TopicEdge";
 
@@ -23,12 +25,12 @@ export const DATASET_MIME = "application/x-foundry-dataset";
 const nodeTypes = { transformer: TransformerNode, dataset: DatasetNode };
 const edgeTypes = { topic: TopicEdge };
 
-/** Ask deploy.py (through the backend) whether source -> target is acceptable; refuse with its message. */
+/** Ask manifest.py (through the backend) whether source -> target is acceptable; refuse with its message. */
 async function confirmEdge(source: string, target: string, localReason?: string): Promise<boolean> {
-  const { graph, toast, catalog, catalogDirty } = useStudio.getState();
+  const { graph, toast } = useStudio.getState();
   let message = localReason ?? null;
   try {
-    const res = await api.checkEdge(graph(), catalogDirty ? catalog : null, source, target);
+    const res = await api.checkEdge(graph(), source, target);
     if (res.ok && !localReason) return true;
     message = res.message ?? localReason ?? null;
   } catch {
@@ -65,7 +67,7 @@ export function Canvas() {
   const isValidConnection: IsValidConnection<PEdge> = useCallback(
     (c) => {
       const s = useStudio.getState();
-      return checkConnection(s.graph(), s.catalog, c.source, c.target).ok;
+      return checkConnection(s.graph(), s.transformers, c.source, c.target).ok;
     },
     [],
   );
@@ -75,13 +77,13 @@ export function Canvas() {
   }, []);
 
   const onConnectEnd = useCallback((_: MouseEvent | TouchEvent, state: FinalConnectionState) => {
-    // A drop on a port that refused the wire: say why, in deploy.py's words.
+    // A drop on a port that refused the wire: say why, in manifest.py's words.
     if (state.isValid !== false || !state.toNode || !state.fromNode || !state.fromHandle) return;
     if (state.toNode.id === state.fromNode.id && !state.toHandle) return;
     const [source, target] =
       state.fromHandle.type === "source" ? [state.fromNode.id, state.toNode.id] : [state.toNode.id, state.fromNode.id];
     const s = useStudio.getState();
-    const check = checkConnection(s.graph(), s.catalog, source, target);
+    const check = checkConnection(s.graph(), s.transformers, source, target);
     if (!check.ok && check.kind !== "duplicate") void confirmEdge(source, target, check.reason);
   }, []);
 
@@ -99,7 +101,8 @@ export function Canvas() {
       const dataset = e.dataTransfer.getData(DATASET_MIME);
       if (dataset && s.meta) {
         e.preventDefault();
-        s.addDataset(dataset, { x: p.x - 80, y: p.y - 30 });
+        const { name, spec } = JSON.parse(dataset) as { name: string; spec: DatasetSpec };
+        placeDataset(name, spec, { x: p.x - 80, y: p.y - 30 });
         return;
       }
       const raw = e.dataTransfer.getData(DRAG_MIME);

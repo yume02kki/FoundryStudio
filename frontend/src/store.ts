@@ -2,15 +2,16 @@ import { applyEdgeChanges, applyNodeChanges, type Edge, type EdgeChange, type No
 import { create } from "zustand";
 import { autoLayout } from "./lib/layout";
 import {
+  datasetName,
   datasetNode,
+  isDatasetNode,
   type Catalog,
-  type DeployHistory,
+  type DatasetSpec,
   type FeedMessage,
   type FeedState,
   type Graph,
   type GraphNode,
   type Health,
-  type Issue,
   type Layout,
   type PipelineListing,
   type TransformerInfo,
@@ -27,8 +28,7 @@ export type PEdge = Edge<Record<string, never>, "topic">;
 
 export interface Meta {
   name: string;
-  catalog: string;
-  consumerGroup: string;
+  configs: Graph["configs"];
   extra: Record<string, unknown>;
 }
 
@@ -40,14 +40,7 @@ export interface Toast {
   testId?: string;
 }
 
-export type Origin = { kind: "new" } | { kind: "saved"; name: string };
-
-export interface DeployRun {
-  op: "deploy" | "rollback" | "stop";
-  running: boolean;
-  log: string[];
-  outcome: { ok: boolean; text: string; errors?: Issue[] } | null;
-}
+export type Origin = { kind: "new" } | { kind: "saved"; folder: string };
 
 export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 export const TOPIC_RE = /^[A-Za-z0-9._-]{1,249}$/;
@@ -67,14 +60,13 @@ interface State {
   edges: PEdge[];
   origin: Origin;
   loadId: number;
-  revision: number; // bumps on every change that affects the manifest (or the catalog)
+  revision: number; // bumps on every change that affects the manifest
   dirty: boolean;
   focus: { nodes: string[]; edges: string[] } | null;
   validation: ValidationResult | null;
   validating: boolean;
 
   catalog: Catalog | null;
-  catalogDirty: boolean;
 
   transformers: Record<string, TransformerInfo>;
   changed: Record<string, { kind: "added" | "updated"; at: number }>;
@@ -89,10 +81,7 @@ interface State {
   liveStage: string | null; // the node whose data Live data shows
   feeds: Record<string, FeedState>; // by dataset name
   versionPickerFor: string | null;
-  deployOpen: boolean;
-  deployRun: DeployRun | null;
-  history: DeployHistory | null;
-  busy: "save" | "deploy" | null;
+  busy: "save" | null;
 
   graph: () => Graph;
   layout: () => Layout;
@@ -101,11 +90,10 @@ interface State {
   onEdgesChange: (changes: EdgeChange<PEdge>[]) => void;
   connect: (source: string, target: string) => void;
   addTransformer: (info: TransformerInfo, ref: string, position: { x: number; y: number }) => string;
-  addDataset: (name: string, position: { x: number; y: number }) => string;
+  addDataset: (name: string, spec: DatasetSpec, position: { x: number; y: number }) => string;
   updateSpec: (id: string, update: (spec: GraphNode) => GraphNode) => void;
   renameNode: (from: string, to: string) => string | null;
   updateMeta: (update: (meta: Meta) => Meta) => void;
-  updateCatalog: (update: (catalog: Catalog) => Catalog) => void;
   select: (ids: { nodes?: string[]; edges?: string[] }) => void;
   setFocus: (focus: State["focus"]) => void;
   markSaved: (origin: Origin) => void;
@@ -135,7 +123,6 @@ export const useStudio = create<State>()((set, get) => ({
   validating: false,
 
   catalog: null,
-  catalogDirty: false,
 
   transformers: {},
   changed: {},
@@ -150,17 +137,13 @@ export const useStudio = create<State>()((set, get) => ({
   liveStage: null,
   feeds: {},
   versionPickerFor: null,
-  deployOpen: false,
-  deployRun: null,
-  history: null,
   busy: null,
 
   graph: () => {
     const { meta, nodes, edges } = get();
     return {
       name: meta?.name ?? "",
-      catalog: meta?.catalog ?? "../catalog.yaml",
-      consumerGroup: meta?.consumerGroup ?? "",
+      configs: meta?.configs ?? {},
       extra: meta?.extra ?? {},
       nodes: nodes.map((n) => n.data.spec),
       edges: edges.map((e) => ({ source: e.source, target: e.target })),
@@ -178,12 +161,7 @@ export const useStudio = create<State>()((set, get) => ({
     const auto = autoLayout(graph.nodes, graph.edges);
     const pos = (id: string) => layout?.positions?.[id] ?? auto[id] ?? { x: 0, y: 0 };
     set((s) => ({
-      meta: {
-        name: graph.name,
-        catalog: graph.catalog || "../catalog.yaml",
-        consumerGroup: graph.consumerGroup ?? "",
-        extra: graph.extra ?? {},
-      },
+      meta: { name: graph.name, configs: graph.configs ?? {}, extra: graph.extra ?? {} },
       nodes: graph.nodes.map((n) => toPNode(n, pos(n.id))),
       edges: graph.edges.map((e) => toPEdge(e.source, e.target)),
       origin,
@@ -192,8 +170,6 @@ export const useStudio = create<State>()((set, get) => ({
       dirty: false,
       focus: null,
       validation: null,
-      history: null,
-      deployRun: null,
     }));
   },
 
@@ -233,19 +209,11 @@ export const useStudio = create<State>()((set, get) => ({
     const taken = new Set(get().nodes.map((n) => n.id));
     let id = info.name.replace(/[^A-Za-z0-9._-]/g, "") || "Transformer";
     for (let i = 2; taken.has(id); i++) id = `${info.name}${i}`;
-    // No Ref unless a version was asked for: the transformer follows its default branch
-    // (foundry: a missing Ref means HEAD; the deploy record pins the commit).
-    const version = ref ? info.versions.find((v) => v.ref === ref) : info.versions.find((v) => v.kind === "branch");
+    // No Ref unless a version was asked for: the transform follows its default branch.
     const spec: GraphNode = {
       id,
       kind: "transformer",
-      transformer: {
-        Repo: info.repo,
-        ...(info.path ? { Path: info.path } : {}),
-        ...(ref ? { Ref: ref } : {}),
-        IN: version?.input ?? info.input ?? undefined,
-        OUT: version?.output ?? info.output ?? undefined,
-      },
+      transformer: { Repo: info.repo, ...(info.path ? { Path: info.path } : {}), ...(ref ? { Ref: ref } : {}) },
     };
     set((s) => ({
       nodes: [...s.nodes.map((n) => ({ ...n, selected: false })), { ...toPNode(spec, position), selected: true }],
@@ -255,13 +223,13 @@ export const useStudio = create<State>()((set, get) => ({
     return id;
   },
 
-  addDataset: (name, position) => {
+  addDataset: (name, datasetSpec, position) => {
     const id = datasetNode(name);
     set((s) => {
       if (s.nodes.some((n) => n.id === id)) {
         return { nodes: s.nodes.map((n) => ({ ...n, selected: n.id === id })), focus: { nodes: [id], edges: [] } };
       }
-      const spec: GraphNode = { id, kind: "dataset", dataset: name };
+      const spec: GraphNode = { id, kind: "dataset", dataset: name, datasetSpec };
       return {
         nodes: [...s.nodes.map((n) => ({ ...n, selected: false })), { ...toPNode(spec, position), selected: true }],
         revision: s.revision + 1,
@@ -278,14 +246,18 @@ export const useStudio = create<State>()((set, get) => ({
       dirty: true,
     })),
 
-  renameNode: (from, to) => {
+  renameNode: (from, toName) => {
     const s = get();
+    // A dataset's id is dataset:<its name>; a transform's id is its name.
+    const dataset = isDatasetNode(from);
+    const to = dataset ? datasetNode(toName) : toName;
     if (from === to) return null;
-    if (!NAME_RE.test(to)) return `name must match ${NAME_RE.source}`;
-    if (s.nodes.some((n) => n.id === to)) return `${to} already exists`;
+    if (!NAME_RE.test(toName)) return `name must match ${NAME_RE.source}`;
+    if (s.nodes.some((n) => n.id === to)) return `${toName} already exists`;
     const ren = (id: string) => (id === from ? to : id);
+    const renamed = (spec: GraphNode): GraphNode => ({ ...spec, id: to, ...(dataset ? { dataset: datasetName(to) } : {}) });
     set({
-      nodes: s.nodes.map((n) => (n.id === from ? { ...n, id: to, data: { spec: { ...n.data.spec, id: to } } } : n)),
+      nodes: s.nodes.map((n) => (n.id === from ? { ...n, id: to, data: { spec: renamed(n.data.spec) } } : n)),
       edges: s.edges.map((e) =>
         e.source === from || e.target === from ? { ...toPEdge(ren(e.source), ren(e.target)), selected: e.selected } : e,
       ),
@@ -297,9 +269,6 @@ export const useStudio = create<State>()((set, get) => ({
 
   updateMeta: (update) =>
     set((s) => (s.meta ? { meta: update(s.meta), revision: s.revision + 1, dirty: true } : s)),
-
-  updateCatalog: (update) =>
-    set((s) => (s.catalog ? { catalog: update(s.catalog), catalogDirty: true, revision: s.revision + 1 } : s)),
 
   select: ({ nodes = [], edges = [] }) =>
     set((s) => ({

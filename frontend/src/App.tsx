@@ -3,11 +3,12 @@ import { useCallback, useEffect, useRef } from "react";
 import { api, subscribe } from "./api";
 import { AssetBrowser } from "./components/AssetBrowser";
 import { Canvas } from "./components/Canvas";
-import { DeployDialog, Toasts, VersionPicker } from "./components/Dialogs";
+import { Toasts, VersionPicker } from "./components/Dialogs";
 import { Inspector } from "./components/Inspector";
 import { useLiveFeeds } from "./components/LiveData";
 import { TopBar } from "./components/TopBar";
 import { useStudio } from "./store";
+import type { Graph } from "./types";
 
 function setUrl(params: Record<string, string> | null) {
   const url = new URL(window.location.href);
@@ -25,7 +26,7 @@ function useValidation() {
       useStudio.setState({ validating: true });
       try {
         const s = useStudio.getState();
-        const validation = await api.validate(s.graph(), s.catalogDirty ? s.catalog : null, ctrl.signal);
+        const validation = await api.validate(s.graph(), ctrl.signal);
         if (!ctrl.signal.aborted) useStudio.setState({ validation });
       } catch (e) {
         if (!ctrl.signal.aborted) console.warn("validate failed", e);
@@ -74,6 +75,19 @@ function useLiveUpdates() {
   }, []);
 }
 
+/** Profiles (from the pipeline's Configs repo) and schemas, for the pickers and the Inspector. */
+async function loadCatalog(configs: Graph["configs"]) {
+  try {
+    const catalog = await api.catalog(configs);
+    useStudio.setState({ catalog });
+    for (const [what, error] of Object.entries(catalog.errors)) {
+      useStudio.getState().toast({ kind: "warning", text: `Couldn't read the ${what}: ${error}` }, 10000);
+    }
+  } catch (e) {
+    useStudio.getState().toast({ kind: "error", text: `Couldn't read profiles and schemas: ${(e as Error).message}` }, 10000);
+  }
+}
+
 export default function App() {
   useValidation();
   useLiveUpdates();
@@ -86,17 +100,19 @@ export default function App() {
     const template = await api.template();
     useStudio.getState().load(template, { version: 1, positions: {} }, { kind: "new" });
     setUrl({ new: "1" });
+    await loadCatalog(template.configs);
   }, []);
 
-  const open = useCallback(async (name: string) => {
+  const open = useCallback(async (folder: string) => {
     if (!confirmDiscard()) return;
     try {
-      const loaded = await api.load(name);
-      useStudio.getState().load(loaded.graph, loaded.layout, { kind: "saved", name });
-      setUrl({ pipeline: name });
+      const loaded = await api.load(folder);
+      useStudio.getState().load(loaded.graph, loaded.layout, { kind: "saved", folder });
+      setUrl({ pipeline: folder });
       for (const w of loaded.graph.warnings ?? []) useStudio.getState().toast({ kind: "warning", text: w }, 10000);
+      await loadCatalog(loaded.graph.configs);
     } catch (e) {
-      useStudio.getState().toast({ kind: "error", text: `Couldn't open ${name}: ${(e as Error).message}` }, 10000);
+      useStudio.getState().toast({ kind: "error", text: `Couldn't open ${folder}: ${(e as Error).message}` }, 10000);
     }
   }, []);
 
@@ -105,13 +121,13 @@ export default function App() {
     if (started.current) return;
     started.current = true;
     (async () => {
-      const [health, pipelines, catalog] = await Promise.all([api.health(), api.pipelines(), api.catalog()]);
-      useStudio.setState({ health, watcher: health.watcher, pipelines: pipelines.pipelines, catalog, catalogDirty: false });
+      const [health, pipelines] = await Promise.all([api.health(), api.pipelines()]);
+      useStudio.setState({ health, watcher: health.watcher, pipelines: pipelines.pipelines });
       const params = new URLSearchParams(window.location.search);
-      const name = params.get("pipeline");
-      if (name) await open(name);
+      const folder = params.get("pipeline");
+      if (folder) await open(folder);
       else if (params.has("new")) await openNew();
-      else if (pipelines.pipelines[0]) await open(pipelines.pipelines[0].name);
+      else if (pipelines.pipelines[0]) await open(pipelines.pipelines[0].folder);
       else await openNew();
     })().catch((e) => useStudio.getState().toast({ kind: "error", text: `Backend unreachable: ${e.message}` }, 0));
   }, [open, openNew]);
@@ -128,7 +144,6 @@ export default function App() {
           <AssetBrowser />
         </div>
         <VersionPicker />
-        <DeployDialog />
         <Toasts />
       </div>
     </ReactFlowProvider>

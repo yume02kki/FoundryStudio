@@ -28,14 +28,15 @@ export async function dropCard(page: Page, name: string, x: number, y: number) {
   await page.getByTestId(`card-${name}`).dragTo(page.getByTestId("canvas"), { targetPosition: { x, y } });
 }
 
-/** Drop a dataset from the Datasets tab onto the canvas at a point relative to the canvas' top-left corner. */
-export async function dropDataset(page: Page, name: string, x: number, y: number) {
+/** Drop another pipeline's dataset (Datasets tab, Other pipelines) onto the canvas, relative to its top-left corner. */
+export async function dropDataset(page: Page, folder: string, name: string, x: number, y: number) {
   await page.getByTestId("tab-datasets").click();
-  await page.getByTestId(`dataset-card-${name}`).dragTo(page.getByTestId("canvas"), { targetPosition: { x, y } });
+  await page.getByTestId("other-datasets").click();
+  await page.getByTestId(`dataset-card-${folder}-${name}`).dragTo(page.getByTestId("canvas"), { targetPosition: { x, y } });
   await page.getByTestId("tab-transformers").click();
 }
 
-/** Run the demo CLI against the e2e's local GitLab stand-in (like pushing to skywalker). */
+/** Run the demo CLI against the e2e's local GitLab stand-in (like pushing to a transformer repo). */
 export function demo(...args: string[]) {
   const root = join(process.env.STUDIO_E2E_SCRATCH!, "gitlab");
   execFileSync("uv", ["run", "--project", "../backend", "python", "-m", "foundry_studio.demo", "--root", root, ...args], {

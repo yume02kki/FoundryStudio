@@ -1,15 +1,15 @@
-"""UI graph <-> pipeline manifest, and the catalog <-> catalog.yaml.
+"""UI graph <-> PipelineManifest.yaml.
 
-The manifest format is the contract with deploy.py, so the UI never invents fields. On
-the canvas, transformers and datasets are both nodes: an edge dataset -> transformer is
-one of the transformer's Inputs, and transformer -> dataset is its Output. Node positions
-live in a separate `<Name>.layout.json`.
+The manifest format is the contract with manifest.py (foundry-common/scripts), so the UI
+never invents fields. On the canvas, transforms and datasets are both nodes: an edge
+dataset -> transform is the transform's In, transform -> dataset its Out. A transform has
+exactly one of each. Every entry under DataSets is a dataset node, wired or not. Node
+positions live in a separate PipelineManifest.layout.json.
 
-Both files are written in one canonical form, the section order, comments and
-indentation of foundry's PipelineManifest.yaml and catalog.yaml, with transformers in
-topological order (ties broken by name, the way deploy.py orders them). Writing is
-therefore deterministic: rebuilding a pipeline by hand yields the same bytes no matter in
-which order things were dragged and wired.
+The manifest is written in one canonical form: the layout and comments of the pipelines'
+own manifests, transforms in topological order (ties broken by name) and datasets in the
+order data flows through them. Writing is therefore deterministic: rebuilding a pipeline by
+hand yields the same bytes no matter in which order things were dragged and wired.
 """
 
 from __future__ import annotations
@@ -20,25 +20,16 @@ import yaml
 
 from .foundry import DATASET, dataset_node
 
-TRANSFORMER_KEYS = ("Repo", "Path", "Ref", "IN", "OUT", "Inputs", "Output", "ConsumerGroup")
-CLUSTER_KEYS = ("Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef")
-DATASET_KEYS = ("Cluster", "Schema", "Description")
-TOP_LEVEL = ("Name", "Catalog", "ConsumerGroup", "Transformers")
+TRANSFORM_KEYS = ("Repo", "Ref", "Path", "In", "Out")
+DATASET_KEYS = ("Type", "Config", "DataSchema", "Topic", "ConnectionSettings")
+CONNECTION_KEYS = ("Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef")
+TOP_LEVEL = ("Name", "Configs", "DataSets", "Transforms")
 
-CATALOG_COMMENT = "# The shared catalog of clusters, schemas and registered topics (datasets)."
-TRANSFORMERS_COMMENT = """\
-# Each transformer reads one or more datasets and writes one or more. IN/OUT are its schemas
-# (transformer.yaml's in/out); they must match the datasets it's wired to.
-# Consumer groups are <ConsumerGroup or Name>.<transformer>."""
-
-CATALOG_HEADER = """\
-# The shared catalog: every Kafka cluster and registered topic pipelines may use.
-# Topics are registered on their cluster by hand; deploy.py only checks they exist and
-# never creates, alters or deletes one. A dataset's name is the topic's real name."""
-CLUSTERS_COMMENT = """\
-# How to reach each cluster. Credentials never go here: SecretRef names a secret,
-# read from FOUNDRY_SECRETS_DIR/<SecretRef>/username and /password."""
-DATASETS_COMMENT = "# Registered topics: the cluster each lives on and the schema it carries."
+HEADER = ("# yaml-language-server: $schema=https://gitlab.com/foundry-common/scripts/-/jobs/artifacts/main/raw/"
+          "manifest.schema.json?job=schema")
+REF_COMMENT = "  # Ref: v1   # optional, defaults to main"
+DATASETS_COMMENT = ("# DataSchema names a schema in https://gitlab.com/foundry-common/foundry-models "
+                    "(Foundry.Models package).")
 
 
 # --------------------------------------------------------------------------- #
@@ -82,20 +73,14 @@ def _value_lines(key: str, value: Any, indent: int) -> list[str]:
     return [f"{pad}{_key(key)}: {_scalar(value)}"]
 
 
-def _ordered(d: dict, known: tuple[str, ...]) -> list[tuple[str, Any]]:
+def _ordered(d: dict, known: tuple[str, ...]) -> dict:
     d = {k: v for k, v in (d or {}).items() if not _blank(v)}
-    return [(k, d[k]) for k in known if k in d] + [(k, v) for k, v in d.items() if k not in known]
+    return {**{k: d[k] for k in known if k in d}, **{k: v for k, v in d.items() if k not in known}}
 
 
 # --------------------------------------------------------------------------- #
 # manifest -> graph
 # --------------------------------------------------------------------------- #
-
-def _inputs(value) -> list[str]:
-    if isinstance(value, str):
-        return [value]
-    return [str(v) for v in value] if isinstance(value, list) else []
-
 
 def manifest_to_graph(text: str) -> dict:
     raw = yaml.safe_load(text) or {}
@@ -103,30 +88,34 @@ def manifest_to_graph(text: str) -> dict:
         raise ValueError("manifest is not a YAML mapping")
     nodes: list[dict] = []
     edges: list[dict] = []
-    datasets: list[str] = []
+    warnings: list[str] = []
+    datasets = raw.get("DataSets") if isinstance(raw.get("DataSets"), dict) else {}
+    for name, spec in datasets.items():
+        nodes.append({"id": dataset_node(str(name)), "kind": "dataset", "dataset": str(name),
+                      "datasetSpec": dict(spec) if isinstance(spec, dict) else {}})
 
-    def use(ds: str) -> str:
-        if ds not in datasets:
-            datasets.append(ds)
-        return dataset_node(ds)
-
-    for name, spec in (raw.get("Transformers") or {}).items():
-        spec = dict(spec or {}) if isinstance(spec, dict) else {}
-        inputs, outputs = _inputs(spec.pop("Inputs", None)), _inputs(spec.pop("Output", None))
+    transforms = raw.get("Transforms") if isinstance(raw.get("Transforms"), dict) else {}
+    for name, spec in transforms.items():
+        spec = dict(spec) if isinstance(spec, dict) else {}
+        ins, out = spec.pop("In", None), spec.pop("Out", None)
         nodes.append({"id": str(name), "kind": "transformer", "transformer": spec})
-        for ds in dict.fromkeys(inputs):
-            edges.append({"source": use(ds), "target": str(name)})
-        for ds in dict.fromkeys(outputs):
-            edges.append({"source": str(name), "target": use(ds)})
-    nodes += [{"id": dataset_node(d), "kind": "dataset", "dataset": d} for d in datasets]
+        for ds, edge in ((ins, {"source": dataset_node(str(ins)), "target": str(name)}),
+                         (out, {"source": str(name), "target": dataset_node(str(out))})):
+            if ds is None:
+                continue
+            if str(ds) not in datasets and not any(n["id"] == dataset_node(str(ds)) for n in nodes):
+                # Referenced but not defined: show it, so the error has a node to point at.
+                nodes.append({"id": dataset_node(str(ds)), "kind": "dataset", "dataset": str(ds), "datasetSpec": None})
+                warnings.append(f"{name} uses dataset {ds}, which isn't under DataSets")
+            edges.append(edge)
+    configs = raw.get("Configs") if isinstance(raw.get("Configs"), dict) else {}
     return {
         "name": str(raw.get("Name") or ""),
-        "catalog": str(raw.get("Catalog") or ""),
-        "consumerGroup": str(raw["ConsumerGroup"]) if raw.get("ConsumerGroup") else "",
+        "configs": {k: str(v) for k, v in configs.items() if not _blank(v)},
         "nodes": nodes,
         "edges": edges,
         "extra": {k: v for k, v in raw.items() if k not in TOP_LEVEL},
-        "warnings": [],
+        "warnings": warnings,
     }
 
 
@@ -135,7 +124,10 @@ def manifest_to_graph(text: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 def wiring(graph: dict) -> dict[str, dict]:
-    """Each transformer's Inputs and Outputs (the datasets it reads and writes, in name order)."""
+    """Each transform's Inputs and Outputs (the datasets it reads and writes, in name order).
+
+    The manifest allows one of each; the canvas refuses a second wire, and validation reports
+    it if one gets through."""
     nodes = {n["id"]: n for n in graph.get("nodes", [])}
     out: dict[str, dict] = {n["id"]: {"Inputs": [], "Outputs": []}
                             for n in nodes.values() if n.get("kind") == "transformer"}
@@ -154,8 +146,9 @@ def wiring(graph: dict) -> dict[str, dict]:
 
 
 def canonical_order(wired: dict[str, dict]) -> list[str]:
-    """Kahn's algorithm with name-sorted ties (deploy.py's ordering); transformers on a cycle go last."""
-    feeds = {t: {r for r, rw in wired.items() if set(wired[t]["Outputs"]) & set(rw["Inputs"])} for t in wired}
+    """Kahn's algorithm with name-sorted ties; transforms on a cycle go last."""
+    feeds = {t: {r for r, rw in wired.items() if r != t and set(wired[t]["Outputs"]) & set(rw["Inputs"])}
+             for t in wired}
     indeg = {t: 0 for t in wired}
     for rs in feeds.values():
         for r in rs:
@@ -175,69 +168,51 @@ def canonical_order(wired: dict[str, dict]) -> list[str]:
 def graph_to_manifest(graph: dict) -> str:
     nodes = {n["id"]: n for n in graph.get("nodes", [])}
     wired = wiring(graph)
-    sections: list[list[str]] = [[f"Name: {_scalar(graph.get('name') or '')}"]]
-    if graph.get("catalog"):
-        sections.append([CATALOG_COMMENT, f"Catalog: {_scalar(graph['catalog'])}"])
-    if graph.get("consumerGroup"):
-        sections.append([f"ConsumerGroup: {_scalar(graph['consumerGroup'])}"])
-
     order = canonical_order(wired)
+    sections: list[list[str]] = [[HEADER, f"Name: {_scalar(graph.get('name') or '')}"]]
+
+    configs = _ordered(graph.get("configs") or {}, ("Repo", "Ref"))
+    if configs:
+        sections.append(_value_lines("Configs", configs, 0) + ([] if "Ref" in configs else [REF_COMMENT]))
+
+    # Datasets in the order data flows through them, then any that nothing reads or writes.
+    names: list[str] = []
+    for t in order:
+        names += [d for d in wired[t]["Inputs"] + wired[t]["Outputs"] if d not in names]
+    defined = {n["dataset"]: n.get("datasetSpec") for n in nodes.values() if n.get("kind") == "dataset"}
+    names += sorted(d for d in defined if d not in names)
+    entries = []
+    for d in names:
+        spec = defined.get(d)
+        if spec is None:
+            continue  # referenced but undefined: validation says so
+        spec = dict(spec)
+        if isinstance(spec.get("ConnectionSettings"), dict):
+            spec["ConnectionSettings"] = _ordered(spec["ConnectionSettings"], CONNECTION_KEYS)
+        spec = _ordered(spec, DATASET_KEYS)
+        entries.append(_value_lines(d, spec, 2) if spec else [f"  {_key(d)}: {{}}"])
+    if entries:
+        lines = [DATASETS_COMMENT, "DataSets:"]
+        for j, entry in enumerate(entries):
+            lines += ([""] if j else []) + entry
+        sections.append(lines)
+
     if order:
-        lines = TRANSFORMERS_COMMENT.splitlines() + ["Transformers:"]
+        lines = ["Transforms:"]
         for j, t in enumerate(order):
-            if j:
-                lines.append("")
-            spec = {k: v for k, v in (nodes[t].get("transformer") or {}).items() if k not in ("Inputs", "Output")}
-            if "Path" in spec and spec["Path"] is not None:
+            spec = {k: v for k, v in (nodes[t].get("transformer") or {}).items() if k not in ("In", "Out")}
+            if spec.get("Path") is not None:
                 spec["Path"] = str(spec["Path"]).strip("/")
-            outputs = wired[t]["Outputs"]
-            # One output is written as a plain name (the common case), several as a list.
-            spec.update(Inputs=wired[t]["Inputs"], Output=outputs[0] if len(outputs) == 1 else outputs)
-            spec = dict(_ordered(spec, TRANSFORMER_KEYS))
-            lines += _value_lines(t, spec, 2) if spec else [f"  {_key(t)}: {{}}"]
+            ins, outs = wired[t]["Inputs"], wired[t]["Outputs"]
+            # One of each; with several (refused by the canvas), the first is written and validation flags it.
+            spec.update(In=ins[0] if ins else None, Out=outs[0] if outs else None)
+            spec = _ordered(spec, TRANSFORM_KEYS)
+            lines += ([""] if j else []) + (_value_lines(t, spec, 2) if spec else [f"  {_key(t)}: {{}}"])
         sections.append(lines)
 
     for k, v in (graph.get("extra") or {}).items():
         if k not in TOP_LEVEL:
             sections.append(_value_lines(k, v, 0))
-    return "\n\n".join("\n".join(s) for s in sections) + "\n"
-
-
-# --------------------------------------------------------------------------- #
-# catalog
-# --------------------------------------------------------------------------- #
-
-def parse_catalog(text: str) -> dict:
-    raw = yaml.safe_load(text) or {}
-    if not isinstance(raw, dict):
-        raise ValueError("catalog is not a YAML mapping")
-
-    def mapping(v) -> dict:
-        return {str(k): (dict(x) if isinstance(x, dict) else x) for k, x in (v or {}).items()} if isinstance(v, dict) else {}
-
-    return {
-        "clusters": {k: {str(a): b for a, b in (v or {}).items()} for k, v in mapping(raw.get("Clusters")).items()},
-        "schemas": {k: str(v) for k, v in mapping(raw.get("Schemas")).items()},
-        "datasets": {k: dict(v or {}) for k, v in mapping(raw.get("Datasets")).items()},
-        "extra": {k: v for k, v in raw.items() if k not in ("Clusters", "Schemas", "Datasets")},
-    }
-
-
-def catalog_to_yaml(catalog: dict) -> str:
-    sections: list[list[str]] = [CATALOG_HEADER.splitlines()]
-    clusters = catalog.get("clusters") or {}
-    lines = CLUSTERS_COMMENT.splitlines() + (["Clusters:"] if clusters else ["Clusters: {}"])
-    for name, settings in clusters.items():
-        lines += _value_lines(name, dict(_ordered(settings or {}, CLUSTER_KEYS)), 2)
-    sections.append(lines)
-    sections.append(_value_lines("Schemas", dict(catalog.get("schemas") or {}), 0))
-    datasets = catalog.get("datasets") or {}
-    lines = DATASETS_COMMENT.splitlines() + (["Datasets:"] if datasets else ["Datasets: {}"])
-    for name, spec in datasets.items():
-        lines += _value_lines(name, dict(_ordered(spec or {}, DATASET_KEYS)), 2)
-    sections.append(lines)
-    for k, v in (catalog.get("extra") or {}).items():
-        sections.append(_value_lines(k, v, 0))
     return "\n\n".join("\n".join(s) for s in sections) + "\n"
 
 

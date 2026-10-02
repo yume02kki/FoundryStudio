@@ -193,7 +193,7 @@ export function AssetBrowser() {
             data-testid="asset-search"
           />
         ) : tab === "datasets" ? (
-          <span className="tab-note">Registered topics from the shared catalog · drag onto the canvas</span>
+          <span className="tab-note">This pipeline's datasets · drag in another pipeline's to reuse its topic</span>
         ) : (
           <>
             <span className="tab-note">Read-only: never joins the pipeline's consumer group, never commits offsets</span>

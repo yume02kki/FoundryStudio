@@ -1,14 +1,14 @@
-"""Offline demo: a local stand-in for skywalker, a workspace, and a deploy target.
+"""Offline demo: local stand-ins for the foundry repos on GitLab, and a workspace.
 
-    python -m foundry_studio.demo init                     # (re)create the demo
-    python -m foundry_studio.demo tag Base64Decoder v0.4.3 # commit + tag, like a release push
+    python -m foundry_studio.demo init                          # (re)create the demo
+    python -m foundry_studio.demo tag decodingtransformer v1.1.0 # commit + tag, like a release push
     python -m foundry_studio.demo add Deduplicate Packets Packets "Drops repeated guids"
     python -m foundry_studio.demo remove Deduplicate
 
-The transformers are stand-ins with the shape of skywalker's C# ones (the real repo is
-private). The workspace starts with foundry's example catalog and SWpipeline. The deploy
-target uses `Runner: none`: deploys are recorded (history, rollback) and the docker
-commands they would run are printed, so the demo needs neither Docker nor Kafka.
+The repos mirror the real ones: foundry-common/configs (connection profiles),
+foundry-common/foundry-models (schemas) and one foundry-enrichers project per transformer,
+each with a transformer.yaml at its root. The workspace holds PacketPipeline. Nothing here
+needs a token, Docker or Kafka; Live data shows generated records.
 """
 
 from __future__ import annotations
@@ -23,20 +23,78 @@ from pathlib import Path
 from .config import REPO_ROOT
 
 DEFAULT_ROOT = REPO_ROOT / ".demo-gitlab"
-SKYWALKER = "yume02kki/skywalker"
-SDK_VERSION = "0.3.0"
-CS_TYPES = {"XmlPackets": "XmlPacket", "EncodedPackets": "EncodedPacket", "Packets": "Packet"}
+CONFIGS = "foundry-common/configs"
+MODELS = "foundry-common/foundry-models"
+ENRICHERS = "foundry-enrichers"
 
 # Fixed dates keep commit SHAs identical across `init` runs.
 FIXED_DATE = "2026-09-01T12:00:00+00:00"
 
+PROFILES = {
+    "kafka/prod.yaml": ("# Production cluster.\nConnectionSettings:\n  Brokers: kafka-internal:9092\n"
+                        "  SecurityProtocol: SASL_SSL\n  SaslMechanism: SCRAM-SHA-512\n  SecretRef: kafka-internal-creds\n"),
+    "kafka/load.yaml": ("# Load-testing cluster.\nConnectionSettings:\n  Brokers: kafka-load:9092\n"
+                        "  SecurityProtocol: SASL_SSL\n  SaslMechanism: SCRAM-SHA-512\n  SecretRef: kafka-load-creds\n"),
+}
+_PACKET = "  guid: uuid\n  data: {data}\n{extra}  time_sent: datetime\n  host_ip: ip\n  target_ip: ip\n"
+SCHEMAS = {
+    "schemas/xml_packets.yaml": "format: xml\nfields:\n" + _PACKET.format(data="base64", extra=""),
+    "schemas/packets.yaml": "format: json\nfields:\n" + _PACKET.format(data="string", extra=""),
+    "schemas/enriched_packets.yaml": "format: json\nfields:\n" + _PACKET.format(data="string", extra="  ISP: string\n"),
+}
+TRANSFORMERS = {  # project -> (name, in, out, description)
+    "xmltojsontransformer": ("XmlToJson", "XmlPackets", "Packets", "Converts XML packets to JSON; data stays base64."),
+    "decodingtransformer": ("Decode", "Packets", "EnrichedPackets", "Decodes the base64 payload to text."),
+    "IspEnricher": ("Isp", "Packets", "EnrichedPackets", "Adds the ISP of host_ip, from CIDR ranges in appsettings."),
+}
+MANIFEST = f"""\
+# yaml-language-server: $schema=https://gitlab.com/foundry-common/scripts/-/jobs/artifacts/main/raw/manifest.schema.json?job=schema
+Name: EnrichmentPipeline
+
+Configs:
+  Repo: https://gitlab.com/{CONFIGS}.git
+  # Ref: v1   # optional, defaults to main
+
+# DataSchema names a schema in https://gitlab.com/foundry-common/foundry-models (Foundry.Models package).
+DataSets:
+  Input:
+    Type: Kafka
+    Config: kafka/prod
+    DataSchema: XmlPackets
+    Topic: raw.xml
+
+  ConvertedPackets:
+    Type: Kafka
+    Config: kafka/prod
+    DataSchema: Packets
+    Topic: enrichment.packets
+
+  Output:
+    Type: Kafka
+    Config: kafka/prod
+    DataSchema: EnrichedPackets
+    Topic: packets.enriched
+
+Transforms:
+  XmlToJson:
+    Repo: https://gitlab.com/{ENRICHERS}/xmltojsontransformer.git
+    In: Input
+    Out: ConvertedPackets
+
+  Decode:
+    Repo: https://gitlab.com/{ENRICHERS}/decodingtransformer.git
+    In: ConvertedPackets
+    Out: Output
+
+  Isp:
+    Repo: https://gitlab.com/{ENRICHERS}/IspEnricher.git
+    In: ConvertedPackets
+    Out: Output
+"""
+
 
 def workspace(root: Path) -> Path:
     return root / "workspace"
-
-
-def target_file(root: Path) -> Path:
-    return root / "target.yaml"
 
 
 def _git(repo: Path, *args: str, date: str | None = None) -> str:
@@ -51,93 +109,66 @@ def _git(repo: Path, *args: str, date: str | None = None) -> str:
     return res.stdout.strip()
 
 
-def transformer_files(name: str, input: str, output: str, version: str = "0.4.2",
+def transformer_files(name: str, input: str, output: str, version: str = "1.0.0",
                       description: str | None = None) -> dict[str, str]:
-    """A C# transformer folder as TRANSFORMERS.md describes it."""
-    cin, cout = CS_TYPES.get(input, input), CS_TYPES.get(output, output)
-    body = ("            yield return p;" if cin == cout else
-            f"            yield return new {cout} {{ Guid = p.Guid, Data = p.Data, TimeSent = p.TimeSent,\n"
-            "                HostIp = p.HostIp, TargetIp = p.TargetIp };")
+    """A transformer repo in the shape of the real ones (minimal: no Kafka loop)."""
     return {
         "transformer.yaml": f"name: {name}\nin: {input}\nout: {output}\ndescription: {description or name}\n",
         f"{name}.csproj": (
-            '<Project Sdk="Microsoft.NET.Sdk">\n  <PropertyGroup>\n    <OutputType>Exe</OutputType>\n'
-            "    <TargetFramework>net8.0</TargetFramework>\n    <Nullable>enable</Nullable>\n"
-            "    <ImplicitUsings>enable</ImplicitUsings>\n"
-            "    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>\n"
+            '<Project Sdk="Microsoft.NET.Sdk.Worker">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n'
             f"    <Version>{version}</Version>\n  </PropertyGroup>\n  <ItemGroup>\n"
-            f'    <PackageReference Include="Foundry.Transformer" Version="{SDK_VERSION}" />\n'
-            "  </ItemGroup>\n</Project>\n"),
-        "packages.lock.json": f'{{\n  "version": 1,\n  "dependencies": {{}},\n  "_demo": "placeholder lock file for {name}"\n}}\n',
-        "Program.cs": (
-            "using Foundry.Schemas;\nusing Foundry.Transformer;\n\n"
-            f"return Runtime.Run(new {name}());\n\n"
-            f"sealed class {name} : ITransformer<{cin}, {cout}>\n{{\n"
-            f"    public async IAsyncEnumerable<{cout}> Transform(Records<{cin}> input)\n    {{\n"
-            f"        await foreach (var p in input)\n{body}\n    }}\n}}\n"),
-        "Dockerfile": (
-            "FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build\nWORKDIR /src\nCOPY . .\n"
-            "RUN dotnet publish -c Release --locked-mode -o /app\n\n"
-            "FROM mcr.microsoft.com/dotnet/runtime:8.0\nCOPY --from=build /app /app\n"
-            f'ENTRYPOINT ["dotnet", "/app/{name}.dll"]\n'),
+            '    <PackageReference Include="Foundry.Models" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
+        "Program.cs": (f"using Foundry.Models;\n\n// Demo stand-in: {input} -> {output}.\n"
+                       f"static {output} Transform({input} p) => new() {{ Guid = p.Guid }};\n"),
     }
 
 
-def _write(repo: Path, folder: str, files: dict[str, str]) -> None:
+def _repo(root: Path, project: str, files: dict[str, str], message: str, tag: str | None = None) -> Path:
+    repo = root / project
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", "main")
     for rel, text in files.items():
-        p = repo / folder / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(text)
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(text)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message, date=FIXED_DATE)
+    if tag:
+        _git(repo, "tag", tag, date=FIXED_DATE)
+    return repo
 
 
-def init(root: Path = DEFAULT_ROOT, foundry_dir: Path = REPO_ROOT / "vendor" / "foundry") -> Path:
-    from .foundry import Foundry
-    from .pipelines import seed
-
+def init(root: Path = DEFAULT_ROOT) -> Path:
     if root.exists():
         shutil.rmtree(root)
-    sky = root / SKYWALKER
-    sky.mkdir(parents=True)
-    _git(sky, "init", "-q", "-b", "main")
-    (sky / "README.md").write_text("# skywalker (demo)\n\nOne folder per transformer.\n")
-    _write(sky, "XmlToJson", transformer_files("XmlToJson", "XmlPackets", "EncodedPackets",
-                                               description="Converts XML packets to JSON, data still base64"))
-    _write(sky, "Base64Decoder", transformer_files("Base64Decoder", "EncodedPackets", "Packets",
-                                                   description="Decodes each packet's base64 data"))
-    _git(sky, "add", "-A")
-    _git(sky, "commit", "-q", "-m", "XmlToJson and Base64Decoder 0.4.2", date=FIXED_DATE)
-    for name in ("XmlToJson", "Base64Decoder"):
-        _git(sky, "tag", f"{name}/v0.4.2", date=FIXED_DATE)
-
-    seed(workspace(root), Foundry(foundry_dir))
-    target_file(root).write_text(
-        "# Demo deploy target: deploys are recorded, nothing runs (no Docker, no Kafka needed).\n"
-        "Runner: none\nCheckTopics: false\nStateDir: state\n")
+    _repo(root, CONFIGS, PROFILES, "Kafka connection profiles")
+    _repo(root, MODELS, SCHEMAS, "Packet schemas")
+    for project, (name, i, o, desc) in TRANSFORMERS.items():
+        _repo(root, f"{ENRICHERS}/{project}", transformer_files(name, i, o, description=desc), f"{name} 1.0.0", "v1.0.0")
+    # A plain folder (not a git repo), so the fake GitLab doesn't list it as a project.
+    (workspace(root) / "PacketPipeline").mkdir(parents=True)
+    (workspace(root) / "PacketPipeline" / "PipelineManifest.yaml").write_text(MANIFEST)
     return root
 
 
-def tag(root: Path, name: str, version: str) -> str:
-    sky = root / SKYWALKER
-    csproj = sky / name / f"{name}.csproj"
+def tag(root: Path, project: str, version: str) -> str:
+    repo = root / ENRICHERS / project
+    csproj = next(repo.glob("*.csproj"))
     csproj.write_text(re.sub(r"<Version>[^<]*</Version>", f"<Version>{version.lstrip('v')}</Version>",
                              csproj.read_text()))
-    _git(sky, "add", "-A")
-    _git(sky, "commit", "-q", "-m", f"{name} {version}")
-    _git(sky, "tag", f"{name}/{version}")
-    return f"{name}/{version}"
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", f"{project} {version}")
+    _git(repo, "tag", version)
+    return f"{project} {version}"
 
 
 def add(root: Path, name: str, input: str, output: str, description: str | None = None) -> None:
-    sky = root / SKYWALKER
-    _write(sky, name, transformer_files(name, input, output, "0.1.0", description))
-    _git(sky, "add", "-A")
-    _git(sky, "commit", "-q", "-m", f"Add {name}")
+    _repo(root, f"{ENRICHERS}/{name}", transformer_files(name, input, output, "0.1.0", description), f"Add {name}")
 
 
 def remove(root: Path, name: str) -> None:
-    sky = root / SKYWALKER
-    _git(sky, "rm", "-rq", name)
-    _git(sky, "commit", "-q", "-m", f"Remove {name}")
+    repo = root / ENRICHERS / name
+    _git(repo, "rm", "-q", "transformer.yaml")
+    _git(repo, "commit", "-q", "-m", f"{name} is no longer a transformer")
 
 
 def main(argv=None) -> None:
@@ -146,7 +177,7 @@ def main(argv=None) -> None:
     ap.add_argument("--root", type=Path, default=Path(os.environ.get("STUDIO_DEMO_ROOT", DEFAULT_ROOT)))
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("init")
-    s = sub.add_parser("tag"); s.add_argument("name"); s.add_argument("version")
+    s = sub.add_parser("tag"); s.add_argument("project"); s.add_argument("version")
     s = sub.add_parser("add"); s.add_argument("name"); s.add_argument("input"); s.add_argument("output")
     s.add_argument("description", nargs="?")
     s = sub.add_parser("remove"); s.add_argument("name")
@@ -154,7 +185,7 @@ def main(argv=None) -> None:
     if a.cmd == "init":
         print(f"demo in {init(a.root)}")
     elif a.cmd == "tag":
-        print(f"tagged {tag(a.root, a.name, a.version)}")
+        print(f"tagged {tag(a.root, a.project, a.version)}")
     elif a.cmd == "add":
         add(a.root, a.name, a.input, a.output, a.description)
         print(f"added {a.name}")

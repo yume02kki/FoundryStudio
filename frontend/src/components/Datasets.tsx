@@ -1,146 +1,173 @@
 import { useReactFlow } from "@xyflow/react";
-import { useMemo, useState, type DragEvent } from "react";
+import { useEffect, useMemo, useState, type DragEvent } from "react";
+import { api } from "../api";
 import { schemaColor } from "../lib/schemaColor";
 import { NAME_RE, TOPIC_RE, useStudio, type PEdge, type PNode } from "../store";
-import { datasetNode } from "../types";
+import { datasetNode, type DatasetSpec, type WorkspaceDataset } from "../types";
 import { DATASET_MIME } from "./Canvas";
 
-const ALL = "*";
+type Filter = { kind: "pipeline" } | { kind: "others" } | { kind: "profile"; profile: string };
 
-/** The catalog's datasets (registered topics) by cluster: drag one onto the canvas, or register a new one. */
+/**
+ * Put a dataset on the canvas. The same topic already there is just shown; a name already
+ * taken by another topic gets a number.
+ */
+export function placeDataset(name: string, spec: DatasetSpec, position: { x: number; y: number }) {
+  const s = useStudio.getState();
+  if (!s.meta) return;
+  const same = s.nodes.find((n) => n.data.spec.kind === "dataset" && spec.Topic && n.data.spec.datasetSpec?.Topic === spec.Topic);
+  if (same) {
+    s.select({ nodes: [same.id] });
+    s.setFocus({ nodes: [same.id], edges: [] });
+    return;
+  }
+  const taken = new Set(s.nodes.map((n) => n.id));
+  let unique = name;
+  for (let i = 2; taken.has(datasetNode(unique)); i++) unique = `${name}${i}`;
+  s.addDataset(unique, spec, position);
+}
+
+function Card({ name, spec, note, onCanvas, draggable }: { name: string; spec: DatasetSpec; note?: string; onCanvas: boolean; draggable: boolean }) {
+  const show = () => {
+    useStudio.getState().select({ nodes: [datasetNode(name)] });
+    useStudio.getState().setFocus({ nodes: [datasetNode(name)], edges: [] });
+  };
+  return (
+    <div
+      className={`card dataset-card${onCanvas ? " on-canvas" : ""}`}
+      draggable={draggable}
+      onDragStart={(e: DragEvent) => {
+        e.dataTransfer.setData(DATASET_MIME, JSON.stringify({ name, spec }));
+        e.dataTransfer.effectAllowed = "copy";
+      }}
+      onClick={onCanvas ? show : undefined}
+      title={[`Topic ${spec.Topic ?? "?"}`, note, draggable ? "Drag onto the canvas to use it here" : "Click to show it"].filter(Boolean).join("\n")}
+      data-testid={`dataset-card-${note ? `${note}-` : ""}${name}`}
+    >
+      <div className="card-head">
+        <span className="card-icon">≋</span>
+        <span className="card-name mono">{name}</span>
+        {onCanvas && <span className="star">◉</span>}
+      </div>
+      <div className="card-types">
+        <span className="schema-chip" style={{ borderColor: schemaColor(spec.DataSchema), color: schemaColor(spec.DataSchema) }}>
+          {spec.DataSchema ?? "?"}
+        </span>{" "}
+        <span className="muted mono">{spec.Topic ?? "no topic"}</span>
+      </div>
+      <div className="card-foot muted">
+        {spec.Config ?? "inline settings"}
+        {note ? ` · from ${note}` : ""}
+      </div>
+    </div>
+  );
+}
+
+/** The pipeline's datasets, those other pipelines define (drag one in to reuse its topic), and the connection profiles. */
 export function Datasets() {
   const catalog = useStudio((s) => s.catalog);
   const nodes = useStudio((s) => s.nodes);
-  const updateCatalog = useStudio((s) => s.updateCatalog);
+  const origin = useStudio((s) => s.origin);
   const flow = useReactFlow<PNode, PEdge>();
-  const [cluster, setCluster] = useState<string>(ALL);
+  const [filter, setFilter] = useState<Filter>({ kind: "pipeline" });
   const [query, setQuery] = useState("");
-  const [adding, setAdding] = useState<"dataset" | "cluster" | null>(null);
-  const onCanvas = useMemo(() => new Set(nodes.filter((n) => n.data.spec.kind === "dataset").map((n) => n.data.spec.dataset)), [nodes]);
+  const [adding, setAdding] = useState(false);
+  const [others, setOthers] = useState<WorkspaceDataset[]>([]);
 
-  if (!catalog) return <div className="empty">Loading the catalog…</div>;
-  const clusters = Object.keys(catalog.clusters);
-  const q = query.trim().toLowerCase();
-  const shown = Object.entries(catalog.datasets).filter(
-    ([name, d]) =>
-      (cluster === ALL || d.Cluster === cluster) &&
-      (!q || [name, d.Schema, d.Cluster, d.Description].some((v) => String(v ?? "").toLowerCase().includes(q))),
+  useEffect(() => {
+    api.datasets().then((r) => setOthers(r.datasets), () => setOthers([]));
+  }, [origin]);
+
+  const mine = useMemo(
+    () => nodes.filter((n) => n.data.spec.kind === "dataset").map((n) => ({ name: n.data.spec.dataset!, spec: n.data.spec.datasetSpec ?? {} })),
+    [nodes],
   );
+  const topicsHere = new Set(mine.map((d) => d.spec.Topic).filter(Boolean));
+  const folder = origin.kind === "saved" ? origin.folder : null;
+  // Other pipelines' datasets, one per topic, minus those already here.
+  const reusable = others.filter(
+    (d, i) => d.folder !== folder && !topicsHere.has(d.spec.Topic) && others.findIndex((o) => o.spec.Topic === d.spec.Topic) === i,
+  );
+  const profiles = Object.keys(catalog?.profiles ?? {});
 
-  const place = (name: string) => {
-    const s = useStudio.getState();
-    if (!s.meta) return;
+  const q = query.trim().toLowerCase();
+  const matches = (name: string, spec: DatasetSpec) =>
+    (filter.kind !== "profile" || spec.Config === filter.profile) &&
+    (!q || [name, spec.Topic, spec.DataSchema, spec.Config].some((v) => String(v ?? "").toLowerCase().includes(q)));
+
+  const center = () => {
     const box = document.querySelector(".canvas")?.getBoundingClientRect();
-    const p = box
-      ? flow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 })
-      : { x: 0, y: 0 };
-    s.addDataset(name, { x: p.x - 80 + Math.random() * 40, y: p.y - 30 + Math.random() * 40 });
+    const p = box ? flow.screenToFlowPosition({ x: box.left + box.width / 2, y: box.top + box.height / 2 }) : { x: 0, y: 0 };
+    return { x: p.x - 80 + Math.random() * 40, y: p.y - 30 + Math.random() * 40 };
   };
+
+  const showMine = filter.kind !== "others";
+  const showOthers = filter.kind !== "pipeline";
+  const title = filter.kind === "pipeline" ? "This pipeline" : filter.kind === "others" ? "Other pipelines" : `Profile ${filter.profile}`;
 
   return (
     <div className="assets-body">
       <div className="tree" data-testid="dataset-tree">
-        <div className={`tree-item tree-root${cluster === ALL ? " active" : ""}`} onClick={() => setCluster(ALL)}>
-          ▾ All datasets
+        <div className={`tree-item tree-root${filter.kind === "pipeline" ? " active" : ""}`} onClick={() => setFilter({ kind: "pipeline" })}>
+          ▾ This pipeline <span className="muted">({mine.length})</span>
         </div>
-        {clusters.map((c) => (
+        <div
+          className={`tree-item tree-root${filter.kind === "others" ? " active" : ""}`}
+          onClick={() => setFilter({ kind: "others" })}
+          data-testid="other-datasets"
+        >
+          ▾ Other pipelines <span className="muted">({reusable.length})</span>
+        </div>
+        <div className="tree-item tree-root muted" title={catalog?.configs ? `${catalog.configs.repo} @ ${catalog.configs.ref}` : undefined}>
+          ▾ Profiles (read-only)
+        </div>
+        {profiles.map((p) => (
           <div
-            key={c}
-            className={`tree-item depth-1${cluster === c ? " active" : ""}`}
-            onClick={() => setCluster(c)}
-            title={String(catalog.clusters[c].Brokers ?? "")}
-            data-testid={`cluster-tree-${c}`}
+            key={p}
+            className={`tree-item depth-1${filter.kind === "profile" && filter.profile === p ? " active" : ""}`}
+            onClick={() => setFilter({ kind: "profile", profile: p })}
+            title={String(catalog?.profiles[p].Brokers ?? "")}
+            data-testid={`profile-tree-${p}`}
           >
             <span className="tree-icon">⛁</span>
-            {c}{" "}
-            <span className="muted">({Object.values(catalog.datasets).filter((d) => d.Cluster === c).length})</span>
+            {p}
           </div>
         ))}
         <div className="tree-actions">
-          <button className="btn btn-small" onClick={() => setAdding("dataset")} data-testid="add-dataset">
+          <button className="btn btn-small" onClick={() => setAdding(true)} data-testid="add-dataset">
             + Dataset
-          </button>
-          <button className="btn btn-small" onClick={() => setAdding("cluster")} data-testid="add-cluster">
-            + Cluster
           </button>
         </div>
       </div>
       <div className="cards-pane">
         <div className="crumbs">
-          {cluster === ALL ? "All datasets" : `Cluster ${cluster}`}
+          {title}
           <span className="crumbs-right">
             <input className="search" placeholder="Search datasets" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="dataset-search" />
           </span>
         </div>
-        {adding === "dataset" && (
+        {adding && (
           <NewDataset
-            clusters={clusters}
-            schemas={Object.keys(catalog.schemas)}
-            taken={new Set(Object.keys(catalog.datasets))}
-            defaultCluster={cluster === ALL ? clusters[0] : cluster}
-            onCancel={() => setAdding(null)}
+            profiles={profiles}
+            schemas={Object.keys(catalog?.schemas ?? {})}
+            taken={new Set(mine.map((d) => d.name))}
+            defaultProfile={filter.kind === "profile" ? filter.profile : profiles.includes("kafka/prod") ? "kafka/prod" : profiles[0]}
+            onCancel={() => setAdding(false)}
             onAdd={(name, spec) => {
-              updateCatalog((c) => ({ ...c, datasets: { ...c.datasets, [name]: spec } }));
-              setAdding(null);
-              place(name);
-            }}
-          />
-        )}
-        {adding === "cluster" && (
-          <NewCluster
-            taken={new Set(clusters)}
-            onCancel={() => setAdding(null)}
-            onAdd={(name, brokers) => {
-              updateCatalog((c) => ({ ...c, clusters: { ...c.clusters, [name]: { Brokers: brokers } } }));
-              setAdding(null);
-              setCluster(name);
+              useStudio.getState().addDataset(name, spec, center());
+              setAdding(false);
             }}
           />
         )}
         <div className="cards" data-testid="dataset-cards">
-          {shown.map(([name, d]) => (
-            <div
-              key={name}
-              className={`card dataset-card${onCanvas.has(name) ? " on-canvas" : ""}`}
-              draggable
-              onDragStart={(e: DragEvent) => {
-                e.dataTransfer.setData(DATASET_MIME, name);
-                e.dataTransfer.effectAllowed = "copy";
-              }}
-              onDoubleClick={() => place(name)}
-              title={[d.Description, `cluster ${d.Cluster}`, "Drag onto the canvas, or double-click"].filter(Boolean).join("\n")}
-              data-testid={`dataset-card-${name}`}
-            >
-              <div className="card-head">
-                <span className="card-icon">≋</span>
-                <span className="card-name mono">{name}</span>
-                {onCanvas.has(name) ? (
-                  <button
-                    className="star"
-                    title="On the canvas: show it"
-                    onClick={() => {
-                      useStudio.getState().select({ nodes: [datasetNode(name)] });
-                      useStudio.getState().setFocus({ nodes: [datasetNode(name)], edges: [] });
-                    }}
-                  >
-                    ◉
-                  </button>
-                ) : (
-                  <button className="star" title="Add to the canvas" onClick={() => place(name)} data-testid={`place-${name}`}>
-                    ＋
-                  </button>
-                )}
-              </div>
-              <div className="card-types">
-                <span className="schema-chip" style={{ borderColor: schemaColor(d.Schema), color: schemaColor(d.Schema) }}>
-                  {d.Schema ?? "?"}
-                </span>{" "}
-                <span className="muted">on {d.Cluster ?? "?"}</span>
-              </div>
-              {d.Description && <div className="card-foot muted">{d.Description}</div>}
-            </div>
-          ))}
-          {shown.length === 0 && <div className="empty">No datasets here.</div>}
+          {showMine && mine.filter((d) => matches(d.name, d.spec)).map((d) => <Card key={d.name} {...d} onCanvas draggable={false} />)}
+          {showOthers &&
+            reusable
+              .filter((d) => matches(d.name, d.spec))
+              .map((d) => <Card key={`${d.folder}/${d.name}`} name={d.name} spec={d.spec} note={d.folder} onCanvas={false} draggable />)}
+          {(showMine ? mine : []).concat(showOthers ? reusable : []).filter((d) => matches(d.name, d.spec)).length === 0 && (
+            <div className="empty">No datasets here.</div>
+          )}
         </div>
       </div>
     </div>
@@ -148,45 +175,47 @@ export function Datasets() {
 }
 
 function NewDataset({
-  clusters,
+  profiles,
   schemas,
   taken,
-  defaultCluster,
+  defaultProfile,
   onAdd,
   onCancel,
 }: {
-  clusters: string[];
+  profiles: string[];
   schemas: string[];
   taken: Set<string>;
-  defaultCluster?: string;
-  onAdd: (name: string, spec: { Cluster: string; Schema: string; Description?: string }) => void;
+  defaultProfile?: string;
+  onAdd: (name: string, spec: DatasetSpec) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("");
-  const [cluster, setCluster] = useState(defaultCluster ?? "");
+  const [topic, setTopic] = useState("");
+  const [profile, setProfile] = useState(defaultProfile ?? "");
   const [schema, setSchema] = useState(schemas[0] ?? "");
-  const [description, setDescription] = useState("");
-  const error = !name
-    ? null
-    : !TOPIC_RE.test(name)
-      ? "not a valid Kafka topic name"
-      : taken.has(name)
-        ? "already in the catalog"
+  const error = name && !NAME_RE.test(name)
+    ? "invalid name"
+    : taken.has(name)
+      ? "already in this pipeline"
+      : topic && !TOPIC_RE.test(topic)
+        ? "not a valid Kafka topic name"
         : null;
+  const ready = name && topic && profile && schema && !error;
   return (
     <form
       className="inline-form"
       data-testid="new-dataset"
       onSubmit={(e) => {
         e.preventDefault();
-        if (name && !error && cluster && schema) onAdd(name, { Cluster: cluster, Schema: schema, ...(description ? { Description: description } : {}) });
+        if (ready) onAdd(name, { Type: "Kafka", Config: profile, DataSchema: schema, Topic: topic });
       }}
     >
-      <span className="note">Register the topic on its cluster first; deploy.py only checks it exists.</span>
-      <input placeholder="topic name, as registered" value={name} onChange={(e) => setName(e.target.value.trim())} data-testid="new-dataset-name" autoFocus />
-      <select value={cluster} onChange={(e) => setCluster(e.target.value)} data-testid="new-dataset-cluster">
-        {clusters.map((c) => (
-          <option key={c}>{c}</option>
+      <span className="note">The topic must already exist; nothing here creates one.</span>
+      <input placeholder="name, e.g. ConvertedPackets" value={name} onChange={(e) => setName(e.target.value.trim())} data-testid="new-dataset-name" autoFocus />
+      <input placeholder="topic" value={topic} onChange={(e) => setTopic(e.target.value.trim())} data-testid="new-dataset-topic" />
+      <select value={profile} onChange={(e) => setProfile(e.target.value)} data-testid="new-dataset-profile">
+        {profiles.map((p) => (
+          <option key={p}>{p}</option>
         ))}
       </select>
       <select value={schema} onChange={(e) => setSchema(e.target.value)} data-testid="new-dataset-schema">
@@ -194,36 +223,8 @@ function NewDataset({
           <option key={c}>{c}</option>
         ))}
       </select>
-      <input placeholder="description (optional)" value={description} onChange={(e) => setDescription(e.target.value)} />
       {error && <span className="issue">{error}</span>}
-      <button className="btn btn-small btn-primary" disabled={!name || !!error || !cluster || !schema} data-testid="new-dataset-add">
-        Add
-      </button>
-      <button type="button" className="btn btn-small" onClick={onCancel}>
-        Cancel
-      </button>
-    </form>
-  );
-}
-
-function NewCluster({ taken, onAdd, onCancel }: { taken: Set<string>; onAdd: (name: string, brokers: string) => void; onCancel: () => void }) {
-  const [name, setName] = useState("");
-  const [brokers, setBrokers] = useState("");
-  const error = !name ? null : !NAME_RE.test(name) ? "invalid name" : taken.has(name) ? "already exists" : null;
-  return (
-    <form
-      className="inline-form"
-      data-testid="new-cluster"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (name && !error && brokers) onAdd(name, brokers);
-      }}
-    >
-      <input placeholder="cluster name" value={name} onChange={(e) => setName(e.target.value.trim())} data-testid="new-cluster-name" autoFocus />
-      <input placeholder="brokers, host:9092" value={brokers} onChange={(e) => setBrokers(e.target.value.trim())} data-testid="new-cluster-brokers" />
-      <span className="note">Security settings: select a dataset on it and edit the cluster in the Inspector.</span>
-      {error && <span className="issue">{error}</span>}
-      <button className="btn btn-small btn-primary" disabled={!name || !!error || !brokers} data-testid="new-cluster-add">
+      <button className="btn btn-small btn-primary" disabled={!ready} data-testid="new-dataset-add">
         Add
       </button>
       <button type="button" className="btn btn-small" onClick={onCancel}>

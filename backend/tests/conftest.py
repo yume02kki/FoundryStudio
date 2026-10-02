@@ -6,12 +6,16 @@ from pathlib import Path
 import pytest
 
 from foundry_studio import demo, gitenv
-from foundry_studio.config import REPO_ROOT
+from foundry_studio.app import Services
+from foundry_studio.config import REPO_ROOT, Settings
 from foundry_studio.fake_gitlab import FakeGitLab
 from foundry_studio.foundry import Foundry
 
-FOUNDRY_DIR = REPO_ROOT / "vendor" / "foundry"
-SKYWALKER = demo.SKYWALKER
+SCRIPTS_DIR = REPO_ROOT / "vendor" / "scripts"
+XMLTOJSON = f"{demo.ENRICHERS}/xmltojsontransformer"
+DECODE = f"{demo.ENRICHERS}/decodingtransformer"
+ISP = f"{demo.ENRICHERS}/IspEnricher"
+TRANSFORMER_PROJECTS = [XMLTOJSON, DECODE, ISP]
 
 
 @pytest.fixture
@@ -21,15 +25,16 @@ def anyio_backend():
 
 @pytest.fixture(scope="session")
 def foundry() -> Foundry:
-    return Foundry(FOUNDRY_DIR)
+    return Foundry(SCRIPTS_DIR)
 
 
 @pytest.fixture
 def demo_root(tmp_path: Path, monkeypatch) -> Path:
-    """A local stand-in for skywalker, a workspace and a Runner: none target, wired up the way the app does it."""
-    root = demo.init(tmp_path / "gitlab", FOUNDRY_DIR)
+    """Local stand-ins for configs, foundry-models and the transformer repos, and a workspace."""
+    root = demo.init(tmp_path / "gitlab")
     env = dict(os.environ)
-    gitenv.configure(env, gitlab_url="https://gitlab.com", fake_root=root, fake_projects=[SKYWALKER])
+    gitenv.configure(env, gitlab_url="https://gitlab.com", fake_root=root,
+                     fake_projects=[p["path_with_namespace"] for p in FakeGitLab(root).projects_sync()])
     for k, v in env.items():
         if os.environ.get(k) != v:
             monkeypatch.setenv(k, v)
@@ -39,3 +44,9 @@ def demo_root(tmp_path: Path, monkeypatch) -> Path:
 @pytest.fixture
 def fake(demo_root: Path) -> FakeGitLab:
     return FakeGitLab(demo_root)
+
+
+@pytest.fixture
+def services(demo_root: Path, fake: FakeGitLab, foundry: Foundry) -> Services:
+    return Services(Settings(scripts_dir=SCRIPTS_DIR), fake, foundry, fake_root=demo_root,
+                    workspace=demo.workspace(demo_root))

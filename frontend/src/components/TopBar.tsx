@@ -29,7 +29,7 @@ function ValidationChip() {
   if (validation.ok) {
     return (
       <div className="chip chip-ok" data-testid="validation-status" title={validation.summary ?? ""}>
-        ✓ deploy.py: valid{validating ? " …" : ""}
+        ✓ manifest.py: valid{validating ? " …" : ""}
       </div>
     );
   }
@@ -42,7 +42,7 @@ function ValidationChip() {
       </button>
       {open && (
         <div className="dropdown errors-list" data-testid="validation-errors">
-          <div className="dropdown-title">deploy.py validate</div>
+          <div className="dropdown-title">manifest.py validate</div>
           {validation.errors.map((e) => (
             <button
               key={e.message}
@@ -76,45 +76,16 @@ function LiveToggle() {
   );
 }
 
-/** The pipeline's deploy state (deploy.py's record); opens the deploy panel. */
-function DeployChip() {
-  const name = useStudio((s) => s.meta?.name);
-  const record = useStudio((s) => s.pipelines.find((p) => p.name === s.meta?.name)?.deploy ?? null);
-  if (!name) return null;
-  const open = () => useStudio.setState({ deployOpen: true });
-  if (!record) {
-    return (
-      <button className="chip chip-muted" onClick={open} data-testid="deploy-chip" title="Never deployed">
-        not deployed
-      </button>
-    );
-  }
-  const cls = record.action === "stop" ? "muted" : "ok";
-  const label = record.action === "stop" ? "stopped" : record.action === "rollback" ? "rolled back" : "deployed";
-  return (
-    <button
-      className={`chip chip-${cls}`}
-      onClick={open}
-      data-testid="deploy-chip"
-      title={`${record.action} ${record.id} at ${record.at} by ${record.by}`}
-    >
-      <span className="dot" /> {label} · {record.id}
-    </button>
-  );
-}
-
-/** Save: the catalog (if edited), then the pipeline. Resolves true when everything was saved. */
+/** Save the pipeline to its folder (a new one: a new folder named after it). Resolves true when saved. */
 export async function saveAll(): Promise<boolean> {
   const s = useStudio.getState();
   useStudio.setState({ busy: "save" });
   try {
-    if (s.catalogDirty && s.catalog) {
-      const res = await api.saveCatalog(s.catalog);
-      useStudio.setState({ catalog: res.catalog, catalogDirty: false });
-    }
-    const graph = s.graph();
-    const res = await api.save(graph, s.layout());
-    s.markSaved({ kind: "saved", name: graph.name });
+    const res = await api.save(s.origin.kind === "saved" ? s.origin.folder : null, s.graph(), s.layout());
+    s.markSaved({ kind: "saved", folder: res.folder });
+    const url = new URL(window.location.href);
+    url.search = new URLSearchParams({ pipeline: res.folder }).toString();
+    window.history.replaceState(null, "", url);
     s.toast({ kind: "success", text: `Saved ${res.path}`, testId: "saved" });
     const p = await api.pipelines();
     useStudio.setState({ pipelines: p.pipelines });
@@ -137,9 +108,8 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string) => void; onNe
   const health = useStudio((s) => s.health);
   const watcher = useStudio((s) => s.watcher);
   const live = useStudio((s) => s.live);
-  const catalogDirty = useStudio((s) => s.catalogDirty);
 
-  const value = origin.kind === "new" ? "" : origin.name;
+  const value = origin.kind === "new" ? "" : origin.folder;
   const watchErrors = Object.keys(watcher?.errors ?? {}).length;
 
   return (
@@ -157,8 +127,8 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string) => void; onNe
       >
         {origin.kind === "new" && <option value="">New pipeline</option>}
         {pipelines.map((p) => (
-          <option key={p.name} value={p.name}>
-            {p.name}
+          <option key={p.folder} value={p.folder}>
+            {p.name === p.folder ? p.name : `${p.name} (${p.folder})`}
           </option>
         ))}
         <option value="__new">+ New pipeline…</option>
@@ -174,8 +144,8 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string) => void; onNe
           onChange={(e) => useStudio.getState().updateMeta((m) => ({ ...m, name: e.target.value.trim() }))}
           data-testid="pipeline-name"
         />
-        {(dirty || catalogDirty) && (
-          <span className="dirty" title={catalogDirty ? "Unsaved changes (including the catalog)" : "Unsaved changes"} data-testid="dirty">
+        {dirty && (
+          <span className="dirty" title="Unsaved changes" data-testid="dirty">
             {" "}●
           </span>
         )}
@@ -196,17 +166,8 @@ export function TopBar({ onOpen, onNew }: { onOpen: (name: string) => void; onNe
         {health?.mode === "demo" ? " · demo" : ""}
       </div>
       <LiveToggle />
-      <DeployChip />
-      <button className="btn" onClick={() => void saveAll()} disabled={!meta?.name || busy !== null} data-testid="save">
+      <button className="btn btn-primary" onClick={() => void saveAll()} disabled={!meta?.name || busy !== null} data-testid="save">
         {busy === "save" ? "Saving…" : "Save"}
-      </button>
-      <button
-        className="btn btn-primary"
-        onClick={() => useStudio.setState({ deployOpen: true })}
-        disabled={!meta?.name || busy !== null}
-        data-testid="deploy"
-      >
-        {busy === "deploy" ? "Deploying…" : "Deploy"}
       </button>
     </header>
   );

@@ -2,8 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// The e2e suite runs against the offline demo: a local git repo standing in for
-// skywalker, a workspace, and a Runner: none deploy target (see backend/foundry_studio/demo.py). No token needed.
+// The e2e suite runs against the offline demo: local git repos standing in for configs,
+// foundry-models and the transformer repos, and a workspace with PacketPipeline
+// (see backend/foundry_studio/demo.py). No token needed.
 const BACKEND_PORT = 8100;
 const FRONTEND_PORT = 5199;
 const scratch = process.env.STUDIO_E2E_SCRATCH ?? join(tmpdir(), `foundry-studio-e2e-${process.pid}`);
@@ -26,10 +27,7 @@ export default defineConfig({
     {
       command: `uv run --project ../backend uvicorn foundry_studio.app:app --app-dir ../backend --host 127.0.0.1 --port ${BACKEND_PORT}`,
       url: `http://127.0.0.1:${BACKEND_PORT}/api/health`,
-      env: {
-        STUDIO_FAKE_GITLAB: join(scratch, "gitlab"),
-        STUDIO_WORKSPACE: join(scratch, "workspace"),
-      },
+      env: { STUDIO_FAKE_GITLAB: join(scratch, "gitlab") },
       reuseExistingServer: false,
       timeout: 120_000,
     },

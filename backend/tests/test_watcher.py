@@ -8,14 +8,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from foundry_studio import demo
-from foundry_studio.app import Services, create_app
-from foundry_studio.config import Settings
+from foundry_studio.app import create_app
 from foundry_studio.discovery import Discovery
 from foundry_studio.watcher import EventBus, Watcher
 
-from .conftest import FOUNDRY_DIR, SKYWALKER
+from .conftest import DECODE, ISP, TRANSFORMER_PROJECTS, XMLTOJSON
 
-SCHEMAS = {"XmlPackets", "EncodedPackets", "Packets"}
+SCHEMAS = {"XmlPackets", "Packets", "EnrichedPackets"}
 
 
 def make_watcher(fake, projects=None):
@@ -33,65 +32,64 @@ def drain(q: asyncio.Queue) -> list[dict]:
 
 
 def new_project(root, project: str, transformers: dict[str, tuple[str, str]]):
+    """A monorepo with one folder per transformer (or none)."""
     repo = root / project
     repo.mkdir(parents=True)
     demo._git(repo, "init", "-q", "-b", "main")
     (repo / "README.md").write_text("x\n")
     for name, (t_in, t_out) in transformers.items():
-        demo._write(repo, name, demo.transformer_files(name, t_in, t_out))
+        for rel, text in demo.transformer_files(name, t_in, t_out).items():
+            (repo / name / rel).parent.mkdir(parents=True, exist_ok=True)
+            (repo / name / rel).write_text(text)
     demo._git(repo, "add", "-A")
     demo._git(repo, "commit", "-q", "-m", "init")
 
 
 @pytest.mark.anyio
-async def test_new_tag_new_folder_and_removal(demo_root, fake):
-    w, bus, q = make_watcher(fake, [SKYWALKER])
+async def test_new_tag_new_repo_and_removal(demo_root, fake):
+    w, bus, q = make_watcher(fake)  # every project
     await w.initial_scan()
-    assert {e["transformer"]["name"] for e in drain(q) if e["type"] == "transformer.added"} == {
-        "XmlToJson", "Base64Decoder"}
+    assert {e["transformer"]["name"] for e in drain(q) if e["type"] == "transformer.added"} == {"XmlToJson", "Decode", "Isp"}
+    assert w.projects_with_transformers == sorted(TRANSFORMER_PROJECTS)
 
     await w.poll_once()
     assert drain(q) == []  # nothing changed, nothing sent
 
-    demo.tag(demo_root, "Base64Decoder", "v0.4.3")
+    demo.tag(demo_root, "decodingtransformer", "v1.1.0")
     await w.poll_once()
     [ev] = drain(q)
-    assert ev["type"] == "transformer.updated" and ev["newVersions"] == ["Base64Decoder/v0.4.3"]
-    assert ev["transformer"]["latest"] == "Base64Decoder/v0.4.3"
+    assert ev["type"] == "transformer.updated" and ev["newVersions"] == ["v1.1.0"]
+    assert ev["transformer"]["latest"] == "v1.1.0"
 
     demo.add(demo_root, "Deduplicate", "Packets", "Packets", "Drops repeated guids")
     await w.poll_once()
     [ev] = drain(q)
     assert ev["type"] == "transformer.added"
     t = ev["transformer"]
-    assert (t["name"], t["input"], t["output"], t["warnings"]) == ("Deduplicate", "Packets", "Packets", [])
+    assert (t["id"], t["input"], t["output"], t["warnings"]) == (f"{demo.ENRICHERS}/Deduplicate:", "Packets", "Packets", [])
 
     demo.remove(demo_root, "Deduplicate")
     await w.poll_once()
     [ev] = drain(q)
-    assert ev == {"type": "transformer.removed", "id": f"{SKYWALKER}:Deduplicate", "name": "Deduplicate"}
+    assert ev == {"type": "transformer.removed", "id": f"{demo.ENRICHERS}/Deduplicate:", "name": "Deduplicate"}
 
 
 @pytest.mark.anyio
-async def test_every_member_project_is_scanned(demo_root, fake):
-    new_project(demo_root, "team-b/enrichers", {"GeoTag": ("Packets", "Packets")})
+async def test_projects_without_transformers_are_listed_but_not_shown(demo_root, fake):
     new_project(demo_root, "team-c/website", {})
-    w, bus, q = make_watcher(fake)  # no fixed list: every project
+    w, bus, q = make_watcher(fake)
     await w.initial_scan()
-    assert {e["transformer"]["id"] for e in drain(q) if e["type"] == "transformer.added"} == {
-        f"{SKYWALKER}:XmlToJson", f"{SKYWALKER}:Base64Decoder", "team-b/enrichers:GeoTag"}
-    assert w.status()["projects"] == ["team-b/enrichers", "team-c/website", SKYWALKER]
-    assert w.projects_with_transformers == ["team-b/enrichers", SKYWALKER]
-
-    # A project created later shows up on the next listing.
-    new_project(demo_root, "team-d/scorers", {"Score": ("Packets", "Packets")})
-    await w.poll_once()
-    assert [e["transformer"]["id"] for e in drain(q) if e["type"] == "transformer.added"] == ["team-d/scorers:Score"]
+    drain(q)
+    assert "team-c/website" in w.status()["projects"] and demo.CONFIGS in w.status()["projects"]
+    assert "team-c/website" not in w.projects_with_transformers
 
     # A transformer added to a project that had none is found by its periodic rescan.
-    demo._write(demo_root / "team-c/website", "Shout", demo.transformer_files("Shout", "Packets", "Packets"))
-    demo._git(demo_root / "team-c/website", "add", "-A")
-    demo._git(demo_root / "team-c/website", "commit", "-qm", "Shout")
+    repo = demo_root / "team-c/website"
+    for rel, text in demo.transformer_files("Shout", "Packets", "Packets").items():
+        (repo / "Shout" / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / "Shout" / rel).write_text(text)
+    demo._git(repo, "add", "-A")
+    demo._git(repo, "commit", "-qm", "Shout")
     w.full_rescan_interval = 0
     await w.poll_once()
     assert "team-c/website:Shout" in {e["transformer"]["id"] for e in drain(q) if e["type"] == "transformer.added"}
@@ -99,13 +97,13 @@ async def test_every_member_project_is_scanned(demo_root, fake):
 
 @pytest.mark.anyio
 async def test_webhook_tag_push_rescans(demo_root, fake):
-    w, bus, q = make_watcher(fake, [SKYWALKER])
+    w, bus, q = make_watcher(fake, [XMLTOJSON])
     await w.initial_scan()
     drain(q)
-    demo.tag(demo_root, "XmlToJson", "v0.5.0")
-    await w.handle_webhook("Tag Push Hook", {"project": {"path_with_namespace": SKYWALKER}})
+    demo.tag(demo_root, "xmltojsontransformer", "v1.2.0")
+    await w.handle_webhook("Tag Push Hook", {"project": {"path_with_namespace": XMLTOJSON}})
     [ev] = drain(q)
-    assert ev["newVersions"] == ["XmlToJson/v0.5.0"]
+    assert ev["newVersions"] == ["v1.2.0"]
 
 
 @pytest.mark.anyio
@@ -120,17 +118,15 @@ async def test_webhook_for_an_unlisted_project_lists_again(demo_root, fake):
 
 @pytest.mark.anyio
 async def test_poll_errors_are_reported_not_fatal(demo_root, fake):
-    w, bus, q = make_watcher(fake, [SKYWALKER, "nobody/missing"])
+    w, bus, q = make_watcher(fake, [DECODE, ISP, "nobody/missing"])
     await w.initial_scan()
     assert "nobody/missing" in w.status()["errors"]
     assert len(w.transformers) == 2
 
 
-def test_webhook_endpoint_checks_token(demo_root, fake, foundry, monkeypatch):
-    settings = Settings(foundry_dir=FOUNDRY_DIR)
-    services = Services(settings, fake, foundry, fake_root=demo_root, workspace=demo.workspace(demo_root))
+def test_webhook_endpoint_checks_token(services, monkeypatch):
     app = create_app(services, start_watcher=False)
-    body = {"project": {"path_with_namespace": SKYWALKER}}
+    body = {"project": {"path_with_namespace": DECODE}}
     with TestClient(app) as client:
         monkeypatch.delenv("GITLAB_WEBHOOK_SECRET", raising=False)
         assert client.post("/api/webhooks/gitlab", json=body).status_code == 503

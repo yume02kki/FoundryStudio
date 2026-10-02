@@ -23,13 +23,15 @@ class Settings:
     poll_interval: float = 10.0
     # Full rescan even without events, to catch anything the events API missed.
     full_rescan_interval: float = 300.0
-    # Checkout of foundry at the pinned commit (git submodule).
-    foundry_dir: Path = REPO_ROOT / "vendor" / "foundry"
-    # The pipelines Studio edits: <workspace>/catalog.yaml and <workspace>/<Name>/manifest.yaml.
-    # None: <repo>/workspace (or the demo's, in demo mode).
+    # Checkout of foundry-common/scripts at the pinned commit (git submodule): manifest.py.
+    scripts_dir: Path = REPO_ROOT / "vendor" / "scripts"
+    # The pipelines Studio edits: <workspace>/<folder>/PipelineManifest.yaml, one folder (a
+    # pipeline repo checkout, ideally) per pipeline. None: <repo>/workspace (or the demo's).
     workspace: Path | None = None
-    # foundry target.yaml: where Deploy runs pipelines. None: Deploy is disabled (the demo has its own).
-    deploy_target: Path | None = None
+    # Connection profiles (kafka/<name>.yaml) for manifests without Configs.Repo, and new ones.
+    configs_repo: str = "https://gitlab.com/foundry-common/configs.git"
+    # The schemas (schemas/*.yaml) DataSchema names refer to.
+    models_project: str = "foundry-common/foundry-models"
     # "demo" or a directory: serve GitLab from local git repos instead of gitlab.com.
     fake_gitlab: str | None = None
     # Kafka credentials for the live feed, laid out like the transformer runtime's:
@@ -57,12 +59,12 @@ class Settings:
             s.transformer_projects = _list(env["STUDIO_TRANSFORMER_PROJECTS"])
         s.poll_interval = float(env.get("STUDIO_POLL_INTERVAL", s.poll_interval))
         s.full_rescan_interval = float(env.get("STUDIO_FULL_RESCAN_INTERVAL", s.full_rescan_interval))
-        if env.get("FOUNDRY_DIR"):
-            s.foundry_dir = Path(env["FOUNDRY_DIR"]).resolve()
+        if env.get("FOUNDRY_SCRIPTS_DIR"):
+            s.scripts_dir = Path(env["FOUNDRY_SCRIPTS_DIR"]).resolve()
         if env.get("STUDIO_WORKSPACE"):
             s.workspace = Path(env["STUDIO_WORKSPACE"]).expanduser().resolve()
-        if env.get("STUDIO_DEPLOY_TARGET"):
-            s.deploy_target = Path(env["STUDIO_DEPLOY_TARGET"]).expanduser().resolve()
+        s.configs_repo = env.get("STUDIO_CONFIGS_REPO", s.configs_repo)
+        s.models_project = env.get("STUDIO_MODELS_PROJECT", s.models_project)
         s.fake_gitlab = env.get("STUDIO_FAKE_GITLAB") or None
         if env.get("FOUNDRY_SECRETS_DIR"):
             s.secrets_dir = Path(env["FOUNDRY_SECRETS_DIR"]).expanduser().resolve()

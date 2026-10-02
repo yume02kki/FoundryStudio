@@ -1,6 +1,6 @@
 .PHONY: setup dev demo demo-reset test test-backend test-frontend e2e build serve
 
-setup:            ## install everything (foundry submodule, Python and Node deps)
+setup:            ## install everything (scripts submodule, Python and Node deps)
 	git submodule update --init
 	cd backend && uv sync
 	cd frontend && npm ci
@@ -8,7 +8,7 @@ setup:            ## install everything (foundry submodule, Python and Node deps
 dev:              ## backend + frontend against GitLab (needs GITLAB_TOKEN)
 	./scripts/dev.sh
 
-demo:             ## same, against a local stand-in for skywalker (no token, no Docker)
+demo:             ## same, against local stand-ins for the foundry repos (no token, no Kafka)
 	STUDIO_FAKE_GITLAB=demo ./scripts/dev.sh
 
 demo-reset:       ## recreate the demo repos

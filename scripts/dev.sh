@@ -3,13 +3,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-[ -f vendor/foundry/deploy.py ] || git submodule update --init
+[ -f vendor/scripts/manifest/manifest.py ] || git submodule update --init
 [ -d frontend/node_modules ] || (cd frontend && npm ci)
 (cd backend && uv sync -q)
 
 if [ -z "${STUDIO_FAKE_GITLAB:-}" ] && [ -z "${GITLAB_TOKEN:-}" ]; then
-  echo "warning: GITLAB_TOKEN is not set; private projects (skywalker, PipelineDeploys) won't be readable." >&2
-  echo "         Export it, or run 'make demo' for the offline demo." >&2
+  echo "warning: GITLAB_TOKEN is not set: only public projects are readable, and transformers are only" >&2
+  echo "         found in STUDIO_TRANSFORMER_PROJECTS. Export it, or run 'make demo' for the offline demo." >&2
 fi
 
 PORT="${STUDIO_PORT:-8000}"

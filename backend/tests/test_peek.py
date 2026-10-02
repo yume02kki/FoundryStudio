@@ -16,17 +16,18 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-from foundry_studio.app import Services, create_app
+from foundry_studio.app import create_app
 from foundry_studio import demo
-from foundry_studio.config import Settings
 from foundry_studio.manifest import manifest_to_graph
 from foundry_studio.peek import (
     FormatChecker, PeekError, bind, client_config, demo_feed, demo_record, demo_value, kafka_feed,
 )
 
-from .conftest import FOUNDRY_DIR
 
-SCHEMAS = FOUNDRY_DIR / "schemas"
+def schema(file: str) -> bytes:
+    """A schema file as foundry-models has it (the demo's copy)."""
+    return demo.SCHEMAS[f"schemas/{file}"].encode()
+
 PACKET = {"guid": "3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17", "data": "Hello, world!", "time_sent": "2026-10-01T14:32:05.123Z",
           "host_ip": "10.0.4.17", "target_ip": "2001:db8::42"}
 XML = (b"<packet><guid>3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17</guid><data>SGVsbG8=</data>"
@@ -85,7 +86,7 @@ def test_bind_uses_this_environments_cluster(tmp_path):
 
 def test_format_checks():
     """foundry's YAML schemas (format + fields), checked field by field like the SDKs decode them."""
-    packets = FormatChecker("Packets", "schemas/packets.yaml", (SCHEMAS / "packets.yaml").read_bytes())
+    packets = FormatChecker("Packets", "schemas/packets.yaml", schema("packets.yaml"))
     assert packets.check(json.dumps(PACKET).encode()) == {"ok": True, "detail": "matches Packets"}
     assert "unknown field(s) extra" in packets.check(json.dumps({**PACKET, "extra": 1}).encode())["detail"]
     assert "missing field(s) guid" in packets.check(json.dumps({k: v for k, v in PACKET.items() if k != "guid"}).encode())["detail"]
@@ -93,10 +94,12 @@ def test_format_checks():
     assert "time_sent: not an RFC 3339" in packets.check(json.dumps({**PACKET, "time_sent": "yesterday"}).encode())["detail"]
     assert not packets.check(b"<packet/>")["ok"]
 
-    encoded = FormatChecker("EncodedPackets", "schemas/encoded_packets.yaml", (SCHEMAS / "encoded_packets.yaml").read_bytes())
-    assert "data: not base64" in encoded.check(json.dumps(PACKET).encode())["detail"]  # "Hello, world!" isn't base64
+    enriched = FormatChecker("EnrichedPackets", "schemas/enriched_packets.yaml", schema("enriched_packets.yaml"))
+    assert "missing field(s) ISP" in enriched.check(json.dumps(PACKET).encode())["detail"]
+    assert enriched.check(json.dumps({**PACKET, "ISP": "x"}).encode())["ok"]
 
-    xml = FormatChecker("XmlPackets", "schemas/xml_packets.yaml", (SCHEMAS / "xml_packets.yaml").read_bytes())
+    xml = FormatChecker("XmlPackets", "schemas/xml_packets.yaml", schema("xml_packets.yaml"))
+    assert "data: not base64" in xml.check(XML.replace(b"SGVsbG8=", b"Hello!"))["detail"]
     assert xml.check(XML) == {"ok": True, "detail": "matches XmlPackets"}
     assert not xml.check(b"<packet>")["ok"]
     assert "guid: not a UUID" in xml.check(XML.replace(b"3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17", b"nope"))["detail"]
@@ -114,12 +117,12 @@ def test_legacy_schema_files_still_work():
 
 @pytest.mark.anyio
 async def test_demo_feed_matches_its_schemas():
-    for schema, file in (("XmlPackets", "xml_packets.yaml"), ("EncodedPackets", "encoded_packets.yaml"),
-                         ("Packets", "packets.yaml")):
-        checker = FormatChecker(schema, file, (SCHEMAS / file).read_bytes())
+    for name, file in (("XmlPackets", "xml_packets.yaml"), ("Packets", "packets.yaml"),
+                       ("EnrichedPackets", "enriched_packets.yaml")):
+        checker = FormatChecker(name, file, schema(file))
         stop = asyncio.Event()
         events = []
-        async for e in demo_feed(schema, "t", checker, stop, interval=0.01):
+        async for e in demo_feed(name, "t", checker, stop, interval=0.01):
             events.append(e)
             if len(events) == 8:
                 stop.set()
@@ -132,7 +135,7 @@ def test_demo_records_line_up_across_topics():
     """Record n has the same key on every topic; the decoded topic drops non-UTF-8 data."""
     for n in range(14):
         rec = demo_record(n)
-        xml, enc, dec = (demo_value(s, rec) for s in ("XmlPackets", "EncodedPackets", "Packets"))
+        xml, enc, dec = (demo_value(s, rec) for s in ("XmlPackets", "Packets", "EnrichedPackets"))
         assert rec["guid"] in xml.decode() and json.loads(enc)["guid"] == rec["guid"]
         if n % 7 == 3:
             assert dec is None
@@ -140,7 +143,7 @@ def test_demo_records_line_up_across_topics():
             assert json.loads(dec)["data"] == rec["data"].decode()
 
 
-def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake, foundry):
+def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(services):
     import socket
     import threading
     import time
@@ -148,8 +151,6 @@ def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake
     import httpx
     import uvicorn
 
-    settings = Settings(foundry_dir=FOUNDRY_DIR)
-    services = Services(settings, fake, foundry, fake_root=demo_root, workspace=demo.workspace(demo_root))
     app = create_app(services, start_watcher=False)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -160,20 +161,20 @@ def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(demo_root, fake
     thread.start()
     while not server.started:
         time.sleep(0.05)
-    graph = manifest_to_graph((FOUNDRY_DIR / "PipelineManifest.yaml").read_text())
+    graph = manifest_to_graph(demo.MANIFEST)
     base = f"http://127.0.0.1:{port}"
     try:
         assert httpx.post(f"{base}/api/peek", json={"graph": graph, "node": "Nope"}).status_code == 400
         events = []
-        with httpx.stream("POST", f"{base}/api/peek", json={"graph": graph, "node": "Base64Decoder"}, timeout=10) as r:
+        with httpx.stream("POST", f"{base}/api/peek", json={"graph": graph, "node": "XmlToJson"}, timeout=10) as r:
             assert r.headers["content-type"].startswith("text/event-stream")
             for line in r.iter_lines():
                 if line.startswith("data: "):
                     events.append(json.loads(line[6:]))
                 if len(events) >= 5:
                     break
-        assert events[0] == {"type": "endpoint", "endpoint": "dataset:packets.decoded", "dataset": "packets.decoded",
-                             "topic": "packets.decoded", "schema": "Packets", "cluster": "downstream"}
+        assert events[0] == {"type": "endpoint", "endpoint": "dataset:ConvertedPackets", "dataset": "ConvertedPackets",
+                             "topic": "enrichment.packets", "schema": "Packets", "cluster": "kafka/prod"}
         assert events[1]["state"] == "live"
         assert all(e["check"] == {"ok": True, "detail": "matches Packets"} for e in events[2:])
         # Closing the stream releases the feed (the semaphore slot comes back).
