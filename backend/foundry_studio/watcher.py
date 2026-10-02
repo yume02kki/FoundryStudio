@@ -3,7 +3,8 @@
 Which projects: every project the token's user is a member of (re-listed every
 `discovery_interval` seconds, so new projects show up on their own), or a fixed list
 (STUDIO_TRANSFORMER_PROJECTS). Any folder with a transformer.yaml in any of them is a
-transformer.
+transformer, and a PipelineManifest.yaml at a project's root makes it a pipeline, checked out
+into the workspace (PipelineSync).
 
 Polling (every `poll_interval` seconds) reads each project's events API, plus
 `last_activity_at` (which GitLab only refreshes about once an hour, so it's a backstop,
@@ -22,6 +23,7 @@ import time
 
 from .discovery import Discovery, TransformerInfo
 from .gitlab import GitLab
+from .pipelines import PipelineSync
 
 log = logging.getLogger("foundry_studio.watcher")
 
@@ -52,8 +54,10 @@ class EventBus:
 
 class Watcher:
     def __init__(self, gitlab: GitLab, discovery: Discovery, bus: EventBus, transformer_projects: list[str] | None,
-                 poll_interval: float = 10.0, full_rescan_interval: float = 300.0, discovery_interval: float = 60.0):
+                 poll_interval: float = 10.0, full_rescan_interval: float = 300.0, discovery_interval: float = 60.0,
+                 pipelines: PipelineSync | None = None):
         self.gitlab = gitlab
+        self.pipelines = pipelines
         self.discovery = discovery
         self.bus = bus
         # None: every project the user is a member of.
@@ -169,7 +173,7 @@ class Watcher:
             "pollInterval": self.poll_interval,
             "lastPoll": self.last_poll,
             "lastWebhook": self.last_webhook,
-            "errors": self.errors,
+            "errors": {**self.errors, **(self.pipelines.errors if self.pipelines else {})},
             "projects": self.transformer_projects,
             "scope": "fixed" if self.fixed_projects is not None else "membership",
             "withTransformers": self.projects_with_transformers,
@@ -196,11 +200,11 @@ class Watcher:
         auto = self.fixed_projects is None
         if auto and (self._last_listing is None or time.monotonic() - self._last_listing >= self.discovery_interval):
             await self.refresh_projects()
-        with_transformers = set(self.projects_with_transformers)
+        with_transformers = set(self.projects_with_transformers) | set(self.discovery.pipeline_projects)
         for project in self.transformer_projects:
             async def check(project=project):
                 stale = time.monotonic() - self._last_full.get(project, 0) > self.full_rescan_interval
-                # With every member project watched, only those that have transformers are polled for
+                # With every member project watched, only those with transformers or a pipeline are polled for
                 # pushes; the others are caught by the project listing's activity and the periodic rescan.
                 if auto and project not in with_transformers:
                     if stale:
@@ -251,3 +255,6 @@ class Watcher:
             for tid in old.keys() - found.keys():
                 gone = self.transformers.pop(tid)
                 self.bus.publish({"type": "transformer.removed", "id": tid, "name": gone.name})
+        proj = self.discovery.pipeline_projects.get(project)
+        if proj and self.pipelines and await self.pipelines.sync(proj):
+            self.bus.publish({"type": "pipelines.changed", "project": project})

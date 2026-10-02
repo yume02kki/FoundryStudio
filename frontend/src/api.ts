@@ -119,9 +119,10 @@ export type ServerEvent =
   | { type: "transformer.added"; transformer: TransformerInfo }
   | { type: "transformer.updated"; transformer: TransformerInfo; newVersions: string[] }
   | { type: "transformer.removed"; id: string; name: string }
-  | { type: "watcher.status"; status: WatcherStatus };
+  | { type: "watcher.status"; status: WatcherStatus }
+  | { type: "pipelines.changed"; project: string };
 
-const EVENT_TYPES = ["transformer.added", "transformer.updated", "transformer.removed", "watcher.status"] as const;
+const EVENT_TYPES = ["transformer.added", "transformer.updated", "transformer.removed", "watcher.status", "pipelines.changed"] as const;
 
 /** Server-Sent Events from /api/events. `onHello` fires on every (re)connect so callers can resync. */
 export function subscribe(onEvent: (e: ServerEvent) => void, onHello: () => void, onDown: () => void): () => void {

@@ -67,6 +67,10 @@ function useLiveUpdates() {
           case "watcher.status":
             useStudio.setState({ watcher: e.status });
             break;
+          case "pipelines.changed":
+            void api.pipelines().then((p) => useStudio.setState({ pipelines: p.pipelines }));
+            s.toast({ kind: "info", text: `Pipeline updated from ${e.project}` });
+            break;
         }
       },
       () => void resync().catch(() => useStudio.setState({ live: false })),

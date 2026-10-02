@@ -23,7 +23,7 @@ from .foundry import Foundry
 from .gitlab import GitLab, HttpGitLab
 from .manifest import graph_to_manifest
 from .peek import FormatChecker, PeekError, bind, client_config, demo_feed, kafka_feed
-from .pipelines import PipelineError, PipelineStore
+from .pipelines import PipelineError, PipelineStore, PipelineSync
 from .sources import SourceError, Sources
 from .validation import Validator, declarations
 from .watcher import EventBus, Watcher
@@ -67,7 +67,8 @@ class Services:
         self.discovery = Discovery(gitlab, lambda: self.sources.schema_names)
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.transformer_projects,
-                               settings.poll_interval, settings.full_rescan_interval)
+                               settings.poll_interval, settings.full_rescan_interval,
+                               pipelines=PipelineSync(self.workspace))
 
     async def context(self, graph: dict) -> dict:
         """What validating a graph needs besides the graph: profiles, schemas, transformer.yaml schemas."""
