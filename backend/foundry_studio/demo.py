@@ -54,7 +54,7 @@ Configs:
   Repo: https://gitlab.com/{CONFIGS}.git
   # Ref: v1   # optional, defaults to main
 
-# DataSchema names a schema in the Configs repo's schemas/ (types in the Foundry.Models package).
+# DataSchema names a schema in the Configs repo's schemas/ (types in the Foundry.Common.Models package).
 DataSets:
   Input:
     Type: Kafka
@@ -116,8 +116,8 @@ def transformer_files(name: str, input: str, output: str, version: str = "1.0.0"
         f"{name}.csproj": (
             '<Project Sdk="Microsoft.NET.Sdk.Worker">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n'
             f"    <Version>{version}</Version>\n  </PropertyGroup>\n  <ItemGroup>\n"
-            '    <PackageReference Include="Foundry.Models" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
-        "Program.cs": (f"using Foundry.Models;\n\n// Demo stand-in: {input} -> {output}.\n"
+            '    <PackageReference Include="Foundry.Common.Transformers" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
+        "Program.cs": (f"using Foundry.Common.Models;\n\n// Demo stand-in: {input} -> {output}.\n"
                        f"static {output} Transform({input} p) => new() {{ Guid = p.Guid }};\n"),
     }
 

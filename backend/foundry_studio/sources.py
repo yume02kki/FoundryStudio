@@ -2,7 +2,7 @@
 
 * connection profiles, `<kind>/<name>.yaml` in the configs repo the manifest names
   (`Configs: {Repo, Ref}`), e.g. kafka/prod;
-* schemas, `schemas/*.yaml` in the configs repo, named as foundry-models' generator names the
+* schemas, `schemas/*.yaml` in the configs repo, named as foundry-common's generator names the
   types (xml_packets.yaml -> XmlPackets).
 
 Both are cached for a few seconds, so validating on every edit doesn't hit GitLab each time,
