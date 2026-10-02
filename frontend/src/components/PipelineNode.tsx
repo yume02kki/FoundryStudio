@@ -1,5 +1,5 @@
 import { Handle, Position, useConnection, useUpdateNodeInternals, type NodeProps } from "@xyflow/react";
-import { memo, useEffect, type DragEvent, type HTMLAttributes } from "react";
+import { memo, useEffect, type CSSProperties, type DragEvent, type HTMLAttributes } from "react";
 import { checkConnection, datasetSchema, emits, expects } from "../lib/rules";
 import { inputSockets, moveSocket, ordered, outputSockets, socketId } from "../lib/sockets";
 import { schemaColor } from "../lib/schemaColor";
@@ -170,7 +170,12 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
     <div
       className={`pnode pnode-dataset${sockets.length ? " pnode-dataset-rows" : ""}${selected ? " selected" : ""}${errors.length ? " has-error" : ""}${focus?.nodes.includes(id) ? " focused" : ""}${spec ? "" : " missing"}`}
       data-testid={`node-${id}`}
-      style={{ borderLeftColor: color }}
+      style={
+        sockets.length
+          ? // Several schemas: the side line runs through each socket's colour, top to bottom.
+            ({ "--stripe": `linear-gradient(${sockets.map(schemaColor).join(", ")})` } as CSSProperties)
+          : { borderLeftColor: color }
+      }
       title={errors.map((e) => e.message).join("\n") || (spec?.Topic ? `Topic ${spec.Topic}` : undefined)}
     >
       {!sockets.length && <Port nodeId={id} port="in" schema={schema} label={false} />}
