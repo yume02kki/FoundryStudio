@@ -24,7 +24,8 @@ const idleFeed = (): FeedState => ({ state: "idle", messages: [], count: 0 });
 
 export type PipelineNodeData = { spec: GraphNode };
 export type PNode = Node<PipelineNodeData, "processor" | "dataset">;
-export type PEdge = Edge<Record<string, never>, "topic">;
+/** A connection in the store; on the canvas, one of its wires (data: the schema drawn and the connection's id). */
+export type PEdge = Edge<{ schema?: string; connection?: string }, "topic">;
 
 export interface Meta {
   name: string;
@@ -50,16 +51,9 @@ function toPNode(spec: GraphNode, position: { x: number; y: number }): PNode {
   return { id: spec.id, type: spec.kind, position, data: { spec } };
 }
 
-/** A flink processor reads several datasets: each wire into it gets its own input socket, in:<dataset node>. */
-export const isFlink = (spec: GraphNode | undefined) => spec?.kind === "processor" && spec.processor?.Runtime === "flink";
-/** A dataset carrying several schemas has several writers: each wire into it gets its own socket, in:<processor>. */
-export const isUnion = (spec: GraphNode | undefined) => spec?.kind === "dataset" && Array.isArray(spec.datasetSpec?.DataSchema);
-export const inputHandle = (source: string) => `in:${source}`;
-
-function toPEdge(source: string, target: string, nodes: PNode[]): PEdge {
-  const spec = nodes.find((n) => n.id === target)?.data.spec;
-  const own = isFlink(spec) || isUnion(spec);
-  return { id: edgeId(source, target), source, target, sourceHandle: "out", targetHandle: own ? inputHandle(source) : "in", type: "topic" };
+/** A connection (the manifest's In/Out); the canvas draws it as one wire per schema (lib/sockets). */
+function toPEdge(source: string, target: string): PEdge {
+  return { id: edgeId(source, target), source, target, type: "topic" };
 }
 
 interface State {
@@ -172,7 +166,7 @@ export const useStudio = create<State>()((set, get) => ({
     set((s) => ({
       meta: { name: graph.name, configs: graph.configs ?? {}, extra: graph.extra ?? {} },
       nodes,
-      edges: graph.edges.map((e) => toPEdge(e.source, e.target, nodes)),
+      edges: graph.edges.map((e) => toPEdge(e.source, e.target)),
       origin,
       loadId: s.loadId + 1,
       revision: s.revision + 1,
@@ -211,7 +205,7 @@ export const useStudio = create<State>()((set, get) => ({
     set((s) =>
       s.edges.some((e) => e.source === source && e.target === target)
         ? s
-        : { edges: [...s.edges, toPEdge(source, target, s.nodes)], revision: s.revision + 1, dirty: true },
+        : { edges: [...s.edges, toPEdge(source, target)], revision: s.revision + 1, dirty: true },
     ),
 
   addProcessor: (info, ref, position) => {
@@ -269,7 +263,7 @@ export const useStudio = create<State>()((set, get) => ({
     set({
       nodes,
       edges: s.edges.map((e) =>
-        e.source === from || e.target === from ? { ...toPEdge(ren(e.source), ren(e.target), nodes), selected: e.selected } : e,
+        e.source === from || e.target === from ? { ...toPEdge(ren(e.source), ren(e.target)), selected: e.selected } : e,
       ),
       revision: s.revision + 1,
       dirty: true,

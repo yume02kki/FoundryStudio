@@ -12,7 +12,7 @@ import { useEdgeFlow } from "./LiveData";
 import { issuesFor, useStudio, type PEdge, type PNode } from "../store";
 
 export function TopicEdge(props: EdgeProps<PEdge>) {
-  const { id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected } = props;
+  const { id, source, target, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected, data } = props;
   const [path] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
   const validation = useStudio((s) => s.validation);
   const focus = useStudio((s) => s.focus);
@@ -20,9 +20,9 @@ export function TopicEdge(props: EdgeProps<PEdge>) {
   const processors = useStudio((s) => s.processors);
 
   const sourceNode = nodes.find((n) => n.id === source)?.data.spec;
-  const color = schemaColor(emits(sourceNode, processors));
+  const color = schemaColor(data?.schema ?? emits(sourceNode, processors));
   const errors = issuesFor(validation, undefined, [source, target]);
-  const focused = focus?.edges.includes(id);
+  const focused = focus?.edges.includes(data?.connection ?? id);
   const stroke = errors.length ? "var(--error)" : color;
 
   const flow = useEdgeFlow(source, target);

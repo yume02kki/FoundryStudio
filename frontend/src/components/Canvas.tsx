@@ -6,12 +6,14 @@ import {
   ReactFlow,
   useReactFlow,
   type Connection,
+  type EdgeChange,
   type FinalConnectionState,
   type IsValidConnection,
 } from "@xyflow/react";
-import { useCallback, useEffect, type DragEvent } from "react";
+import { useCallback, useEffect, useMemo, type DragEvent } from "react";
 import { api } from "../api";
 import { checkConnection } from "../lib/rules";
+import { wires } from "../lib/sockets";
 import { ALL_COLORS } from "../lib/schemaColor";
 import { useStudio, type PEdge, type PNode } from "../store";
 import type { DatasetSpec } from "../types";
@@ -46,8 +48,37 @@ export function Canvas() {
   const loadId = useStudio((s) => s.loadId);
   const focus = useStudio((s) => s.focus);
   const onNodesChange = useStudio((s) => s.onNodesChange);
-  const onEdgesChange = useStudio((s) => s.onEdgesChange);
+  const onConnectionsChange = useStudio((s) => s.onEdgesChange);
+  const processors = useStudio((s) => s.processors);
   const flow = useReactFlow<PNode, PEdge>();
+
+  // Each connection drawn as one wire per schema it carries, between that schema's sockets.
+  const drawn = useMemo(() => {
+    const spec = (id: string) => nodes.find((n) => n.id === id)?.data.spec;
+    return edges.flatMap((e) =>
+      wires(spec(e.source), spec(e.target), processors).map((w): PEdge => ({
+        ...e, id: `${e.id}|${w.sourceHandle}|${w.targetHandle}`, sourceHandle: w.sourceHandle, targetHandle: w.targetHandle,
+        data: { schema: w.schema, connection: e.id },
+      })),
+    );
+  }, [edges, nodes, processors]);
+
+  // Selecting or deleting a wire selects or deletes its connection.
+  const onEdgesChange = useCallback(
+    (changes: EdgeChange<PEdge>[]) => {
+      const seen = new Set<string>();
+      const mapped = changes.flatMap((c): EdgeChange<PEdge>[] => {
+        if (c.type === "add") return [c];
+        const id = c.id.split("|")[0];
+        const key = `${c.type}:${id}`;
+        if (seen.has(key)) return [];
+        seen.add(key);
+        return [{ ...c, id } as EdgeChange<PEdge>];
+      });
+      onConnectionsChange(mapped);
+    },
+    [onConnectionsChange],
+  );
 
   useEffect(() => {
     // An empty (new) pipeline has nothing to fit: show it at 100% rather than zoomed all the way in.
@@ -121,7 +152,7 @@ export function Canvas() {
       <ArrowMarkers colors={ALL_COLORS} />
       <ReactFlow<PNode, PEdge>
         nodes={nodes}
-        edges={edges}
+        edges={drawn}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}

@@ -1618,11 +1618,28 @@ button.tab:hover:not(.active) {
   padding-left: 0;
 }
 
-.pnode-dataset .port-ins {
-  align-self: stretch;
-  justify-content: space-evenly;
-  gap: 16px;
-  padding: 6px 0;
+.pnode-dataset-rows {
+  flex-direction: column;
+}
+
+.dataset-rows {
+  border-top: 1px solid #2a2a2a;
+  padding: 4px 0;
+}
+
+.dataset-row {
+  display: flex;
+  align-items: center;
+  font-size: 11px;
+  padding: 2px 0;
+}
+
+.dataset-row-label {
+  padding: 0 12px;
+}
+
+.dataset-row .port-out {
+  margin-left: auto;
 }
 
 .pnode-dataset .port-out {

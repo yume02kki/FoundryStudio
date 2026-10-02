@@ -1,10 +1,10 @@
 import { Handle, Position, useConnection, type NodeProps } from "@xyflow/react";
 import { memo } from "react";
-import { checkConnection, datasetSchema, emits, expects, schemaList } from "../lib/rules";
+import { checkConnection, datasetSchema, emits, expects } from "../lib/rules";
+import { inputSockets, outputSockets, socketId } from "../lib/sockets";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, updateFor, versionFor } from "../lib/versions";
-import { inputHandle, isFlink, isUnion, issuesFor, useStudio, type PNode } from "../store";
-import { datasetName } from "../types";
+import { issuesFor, useStudio, type PNode } from "../store";
 import { NodeActivity } from "./LiveData";
 
 type PortState = "idle" | "compatible" | "incompatible" | "origin";
@@ -97,59 +97,18 @@ function ProcessorNodeView({ id, data, selected }: NodeProps<PNode>) {
       <div className="pnode-sub">{subtitle}</div>
       <NodeActivity node={id} />
       <div className="pnode-ports">
-        {isFlink(spec) ? <FlinkInputs id={id} /> : <Port nodeId={id} port="in" schema={expects(spec, processors)} />}
+        {inputSockets(spec, processors).length ? (
+          <div className="port-ins">
+            {inputSockets(spec, processors).map((s) => (
+              <Port key={s} nodeId={id} port="in" handle={socketId("in", s)} testId={`port-${id}-in-${s}`} schema={s} />
+            ))}
+          </div>
+        ) : (
+          <Port nodeId={id} port="in" schema={expects(spec, processors)} />
+        )}
         <Port nodeId={id} port="out" schema={emits(spec, processors)} />
       </div>
       {errors.length > 0 && <div className="pnode-errors">{errors.length} issue{errors.length > 1 ? "s" : ""}</div>}
-    </div>
-  );
-}
-
-/**
- * A flink processor's inputs, like a Blender node's: one socket per dataset it reads (showing what that dataset
- * carries), plus a spare socket to wire another, labeled with the declared input schemas no wire covers yet.
- */
-function FlinkInputs({ id }: { id: string }) {
-  const edges = useStudio((s) => s.edges);
-  const nodes = useStudio((s) => s.nodes);
-  const processors = useStudio((s) => s.processors);
-  const spec = nodes.find((n) => n.id === id)?.data.spec;
-  const sources = [...new Set(edges.filter((e) => e.target === id).map((e) => e.source))].sort();
-  const carried = (source: string) => datasetSchema(nodes.find((n) => n.id === source)?.data.spec);
-  const covered = new Set(sources.flatMap((s) => schemaList(carried(s)) ?? []));
-  const missing = (schemaList(expects(spec, processors)) ?? []).filter((s) => !covered.has(s));
-  return (
-    <div className="port-ins">
-      {sources.map((source) => (
-        <Port key={source} nodeId={id} port="in" handle={inputHandle(source)} testId={`port-${id}-in-${datasetName(source)}`}
-          schema={carried(source)} title={datasetName(source)} connectable={false} />
-      ))}
-      <Port nodeId={id} port="in" schema={missing.join(" | ") || undefined} text={missing.length ? `+ ${missing.join(" | ")}` : "+"}
-        title="Wire another dataset in" />
-    </div>
-  );
-}
-
-/**
- * A dataset carrying several schemas: one socket per processor writing it, colored by what that processor writes,
- * plus a spare one for another writer (its tooltip lists the carried schemas nobody writes yet).
- */
-function UnionInputs({ id }: { id: string }) {
-  const edges = useStudio((s) => s.edges);
-  const nodes = useStudio((s) => s.nodes);
-  const processors = useStudio((s) => s.processors);
-  const node = (n: string) => nodes.find((x) => x.id === n)?.data.spec;
-  const writers = [...new Set(edges.filter((e) => e.target === id).map((e) => e.source))].sort();
-  const written = new Set(writers.map((w) => emits(node(w), processors)));
-  const unwritten = (schemaList(datasetSchema(node(id))) ?? []).filter((s) => !written.has(s));
-  return (
-    <div className="port-ins">
-      {writers.map((w) => {
-        const schema = emits(node(w), processors);
-        return <Port key={w} nodeId={id} port="in" handle={inputHandle(w)} testId={`port-${id}-in-${w}`} schema={schema}
-          label={false} title={`${w} writes ${schema ?? "?"}`} connectable={false} />;
-      })}
-      <Port nodeId={id} port="in" label={false} title={unwritten.length ? `Wire a writer of ${unwritten.join(" or ")}` : "Wire another writer"} />
     </div>
   );
 }
@@ -163,15 +122,16 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
   const spec = data.spec.datasetSpec;
   const schema = datasetSchema(data.spec);
   const color = schemaColor(schema);
+  const sockets = outputSockets(data.spec);
 
   return (
     <div
-      className={`pnode pnode-dataset${selected ? " selected" : ""}${errors.length ? " has-error" : ""}${focus?.nodes.includes(id) ? " focused" : ""}${spec ? "" : " missing"}`}
+      className={`pnode pnode-dataset${sockets.length ? " pnode-dataset-rows" : ""}${selected ? " selected" : ""}${errors.length ? " has-error" : ""}${focus?.nodes.includes(id) ? " focused" : ""}${spec ? "" : " missing"}`}
       data-testid={`node-${id}`}
       style={{ borderLeftColor: color }}
       title={errors.map((e) => e.message).join("\n") || (spec?.Topic ? `Topic ${spec.Topic}` : undefined)}
     >
-      {isUnion(data.spec) ? <UnionInputs id={id} /> : <Port nodeId={id} port="in" schema={schema} label={false} />}
+      {!sockets.length && <Port nodeId={id} port="in" schema={schema} label={false} />}
       <div className="dataset-body">
         <div className="pnode-head">
           <span className="pnode-kind">≋ Dataset</span>
@@ -189,7 +149,19 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
         <NodeActivity node={id} />
         {errors.length > 0 && <div className="pnode-errors">{errors.length} issue{errors.length > 1 ? "s" : ""}</div>}
       </div>
-      <Port nodeId={id} port="out" schema={schema} label={false} />
+      {!sockets.length && <Port nodeId={id} port="out" schema={schema} label={false} />}
+      {sockets.length > 0 && (
+        // Several schemas: a row per schema, writers of it wire in on the left, readers out on the right.
+        <div className="dataset-rows">
+          {sockets.map((s) => (
+            <div className="dataset-row" key={s}>
+              <Port nodeId={id} port="in" handle={socketId("in", s)} testId={`port-${id}-in-${s}`} schema={s} label={false} />
+              <span className="dataset-row-label" style={{ color: schemaColor(s) }}>{s}</span>
+              <Port nodeId={id} port="out" handle={socketId("out", s)} testId={`port-${id}-out-${s}`} schema={s} label={false} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
