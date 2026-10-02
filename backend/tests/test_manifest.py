@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from pathlib import Path
 
 import pytest
 import yaml
@@ -74,3 +75,13 @@ def test_undefined_dataset_becomes_a_node_with_a_warning():
 def test_rejects_non_mapping():
     with pytest.raises(ValueError):
         manifest_to_graph("- a\n- b\n")
+
+
+def test_flink_inputs_and_union_schemas_round_trip():
+    text = (Path(__file__).parents[3] / "foundry-pipelines" / "PacketPipeline" / "PipelineManifest.yaml")
+    raw = yaml.safe_load(text.read_text()) if text.exists() else None
+    if raw is None:
+        pytest.skip("needs a foundry-pipelines checkout next to FoundryStudio")
+    again = yaml.safe_load(graph_to_manifest(manifest_to_graph(text.read_text())))
+    assert again["Processors"]["Join"] == raw["Processors"]["Join"]
+    assert again["DataSets"]["Enrichments"]["DataSchema"] == ["DecodeEnrichment", "IspEnrichment"]

@@ -20,7 +20,7 @@ import yaml
 
 from .foundry import DATASET, dataset_node
 
-PROCESSOR_KEYS = ("Repo", "Ref", "Path", "In", "Out")
+PROCESSOR_KEYS = ("Repo", "Ref", "Path", "Runtime", "In", "Out")
 DATASET_KEYS = ("Type", "Config", "DataSchema", "Topic", "ConnectionSettings")
 CONNECTION_KEYS = ("Brokers", "SecurityProtocol", "SaslMechanism", "SecretRef")
 TOP_LEVEL = ("Name", "Configs", "DataSets", "Processors")
@@ -97,9 +97,10 @@ def manifest_to_graph(text: str) -> dict:
     for name, spec in processors.items():
         spec = dict(spec) if isinstance(spec, dict) else {}
         ins, out = spec.pop("In", None), spec.pop("Out", None)
+        ins = ins if isinstance(ins, list) else [ins]  # flink processors may read several datasets
         nodes.append({"id": str(name), "kind": "processor", "processor": spec})
-        for ds, edge in ((ins, {"source": dataset_node(str(ins)), "target": str(name)}),
-                         (out, {"source": str(name), "target": dataset_node(str(out))})):
+        for ds, edge in [*((i, {"source": dataset_node(str(i)), "target": str(name)}) for i in ins),
+                         (out, {"source": str(name), "target": dataset_node(str(out))})]:
             if ds is None:
                 continue
             if str(ds) not in datasets and not any(n["id"] == dataset_node(str(ds)) for n in nodes):
@@ -203,8 +204,10 @@ def graph_to_manifest(graph: dict) -> str:
             if spec.get("Path") is not None:
                 spec["Path"] = str(spec["Path"]).strip("/")
             ins, outs = wired[t]["Inputs"], wired[t]["Outputs"]
-            # One of each; with several (refused by the canvas), the first is written and validation flags it.
-            spec.update(In=ins[0] if ins else None, Out=outs[0] if outs else None)
+            # One of each (flink: In may be several); with more (refused by the canvas), the first is
+            # written and validation flags it.
+            many = spec.get("Runtime") == "flink" and len(ins) > 1
+            spec.update(In=ins if many else ins[0] if ins else None, Out=outs[0] if outs else None)
             spec = _ordered(spec, PROCESSOR_KEYS)
             lines += ([""] if j else []) + (_value_lines(t, spec, 2) if spec else [f"  {_key(t)}: {{}}"])
         sections.append(lines)

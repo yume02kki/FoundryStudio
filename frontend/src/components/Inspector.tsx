@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { ANY, inputsOf, outputsOf, processorschemas } from "../lib/rules";
+import { ANY, inputsOf, outputsOf, processorschemas, schemaLabel } from "../lib/rules";
 import { edgeDataset } from "../lib/stages";
 import { schemaColor } from "../lib/schemaColor";
 import { findInfo, versionFor } from "../lib/versions";
@@ -290,7 +290,7 @@ function DatasetInspector({ node }: { node: GraphNode }) {
   const spec = node.datasetSpec;
   const profiles = Object.keys(catalog?.profiles ?? {});
   const schemas = Object.keys(catalog?.schemas ?? {});
-  const info = spec?.DataSchema ? catalog?.schemas[spec.DataSchema] : undefined;
+  const info = typeof spec?.DataSchema === "string" && spec.DataSchema ? catalog?.schemas[spec.DataSchema] : undefined;
   const g = graph();
   const processors = g.nodes.filter((n) => n.kind === "processor").map((n) => n.id);
   const writers = processors.filter((t) => outputsOf(g, t).includes(name));
@@ -332,7 +332,11 @@ function DatasetInspector({ node }: { node: GraphNode }) {
         <Select value={spec?.Config} options={profiles} onChange={(v) => set({ Config: v })} testId="dataset-profile" />
       </Field>
       <Field label="Schema" hint={`DataSchema: a schema in the configs repo's schemas/, or ${ANY} for none`}>
-        <Select value={spec?.DataSchema} options={[ANY, ...schemas]} onChange={(v) => set({ DataSchema: v })} testId="dataset-schema" />
+        {Array.isArray(spec?.DataSchema) ? (
+          <span className="mono" data-testid="dataset-schema">{schemaLabel(spec.DataSchema)} <span className="muted">(several writers; edit in the manifest)</span></span>
+        ) : (
+          <Select value={spec?.DataSchema} options={[ANY, ...schemas]} onChange={(v) => set({ DataSchema: v })} testId="dataset-schema" />
+        )}
       </Field>
       {info && (
         <div className="schema-fields" data-testid="dataset-fields">
@@ -411,7 +415,7 @@ function EdgeInspector({ id }: { id: string }) {
         <input value={spec?.Topic ?? ""} readOnly className="mono" data-testid="edge-topic" />
       </Field>
       <Field label="Carries">
-        <SchemaChip schema={spec?.DataSchema} />
+        <SchemaChip schema={schemaLabel(spec?.DataSchema)} />
       </Field>
       {reading && (
         <Field label="Consumer group" hint="<pipeline Name>.<processor>">

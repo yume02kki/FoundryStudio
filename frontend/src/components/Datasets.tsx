@@ -5,7 +5,7 @@ import { schemaColor } from "../lib/schemaColor";
 import { NAME_RE, TOPIC_RE, useStudio, type PEdge, type PNode } from "../store";
 import { datasetNode, type DatasetSpec, type WorkspaceDataset } from "../types";
 import { DATASET_MIME } from "./Canvas";
-import { ANY } from "../lib/rules";
+import { ANY, schemaLabel } from "../lib/rules";
 
 type Filter = { kind: "pipeline" } | { kind: "others" } | { kind: "profile"; profile: string };
 
@@ -51,8 +51,8 @@ function Card({ name, spec, note, onCanvas, draggable }: { name: string; spec: D
         {onCanvas && <span className="star">◉</span>}
       </div>
       <div className="card-types">
-        <span className="schema-chip" style={{ borderColor: schemaColor(spec.DataSchema), color: schemaColor(spec.DataSchema) }}>
-          {spec.DataSchema || ANY}
+        <span className="schema-chip" style={{ borderColor: schemaColor(schemaLabel(spec.DataSchema)), color: schemaColor(schemaLabel(spec.DataSchema)) }}>
+          {schemaLabel(spec.DataSchema) || ANY}
         </span>{" "}
         <span className="muted mono">{spec.Topic ?? "no topic"}</span>
       </div>

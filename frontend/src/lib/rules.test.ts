@@ -60,6 +60,21 @@ describe("checkConnection", () => {
     expect(checkConnection(g, processors, "dataset:Untyped", "Decode")).toEqual({ ok: true });
   });
 
+  it("takes writers of any schema a union carries, but only readers of all of them", () => {
+    const g = base();
+    g.nodes.push({ ...d("Mixed", "Packets"), datasetSpec: { Type: "Kafka", DataSchema: ["Packets", "XmlPackets"], Topic: "mixed" } });
+    expect(checkConnection(g, processors, "XmlToJson", "dataset:Mixed")).toEqual({ ok: true });
+    const into = checkConnection(g, processors, "dataset:Mixed", "Decode");
+    expect(!into.ok && into.reason).toBe("Processors.Decode.In: Mixed carries Packets, XmlPackets but Decode reads Packets");
+  });
+
+  it("lets flink processors read several datasets", () => {
+    const g = base();
+    g.nodes.push({ id: "Join", kind: "processor", processor: { Repo: "https://gitlab.com/x/join.git", Runtime: "flink" } });
+    g.edges.push({ source: "dataset:Converted", target: "Join" });
+    expect(checkConnection(g, processors, "dataset:Output", "Join")).toEqual({ ok: true });
+  });
+
   it("allows one In and one Out per processor", () => {
     const g = base();
     g.nodes.push(d("Other", "XmlPackets"));

@@ -23,17 +23,26 @@ export type Processors = Record<string, ProcessorInfo>;
 /** The schema name for "no schema"; an omitted schema means the same. Any matches every schema. */
 export const ANY = "Any";
 
-const typed = (schema: string | null | undefined) => (schema && schema !== ANY ? schema : undefined);
+/** One schema, a list (a dataset several processors write), or "A | B" as processor.yaml lists show: undefined for Any or none. */
+export function schemaList(value: string | string[] | null | undefined): string[] | undefined {
+  const list = Array.isArray(value) ? value.map(String) : value ? value.split(" | ") : [];
+  return list.length && !list.includes(ANY) ? list : undefined;
+}
 
-/** The schema a dataset carries (its DataSchema); undefined for Any. */
+/** How a schema or list of them is shown: "A | B". */
+export function schemaLabel(value: string | string[] | null | undefined): string | undefined {
+  return Array.isArray(value) ? value.join(" | ") : value || undefined;
+}
+
+/** The schema(s) a dataset carries (its DataSchema), as a label; undefined for Any. */
 export function datasetSchema(node: GraphNode | undefined): string | undefined {
-  return typed(node?.datasetSpec?.DataSchema);
+  return schemaList(node?.datasetSpec?.DataSchema)?.join(" | ");
 }
 
 /** A processor's in and out schemas: its processor.yaml at its Ref (no Ref: the default branch). */
 export function processorschemas(node: GraphNode | undefined, processors: Processors): { input?: string; output?: string } {
   const v = versionFor(findInfo(node?.processor, Object.values(processors)), node?.processor?.Ref);
-  return { input: typed(v?.input), output: typed(v?.output) };
+  return { input: schemaList(v?.input)?.join(" | "), output: schemaList(v?.output)?.join(" | ") };
 }
 
 /** The schema a node writes: a processor's out, a dataset's own schema. */
@@ -106,24 +115,26 @@ export function checkConnection(graph: GraphLike, processors: Processors, source
     if (inputsOf(graph, source).includes(ds)) {
       return { ok: false, kind: "self", reason: `Processors.${source}: reads and writes ${ds}` };
     }
+    // A writer's schema must be one the dataset carries.
     const out = emits(s, processors);
-    const carried = datasetSchema(t);
-    if (out && carried && out !== carried) {
-      return { ok: false, kind: "type", reason: `Processors.${source}.Out: ${source} writes ${out} but ${ds} carries ${carried}` };
+    const carried = schemaList(datasetSchema(t));
+    if (out && carried && !carried.includes(out)) {
+      return { ok: false, kind: "type", reason: `Processors.${source}.Out: ${source} writes ${out} but ${ds} carries ${[...carried].sort().join(", ")}` };
     }
   } else {
     const ds = s.dataset!;
     const reads = inputsOf(graph, target);
-    if (reads.length) {
+    if (reads.length && t.processor?.Runtime !== "flink") {
       return { ok: false, kind: "single", reason: `Processors.${target}.In: ${target} already reads ${reads[0]}; a processor reads one dataset` };
     }
     if (outputsOf(graph, target).includes(ds)) {
       return { ok: false, kind: "self", reason: `Processors.${target}: reads and writes ${ds}` };
     }
-    const carried = datasetSchema(s);
-    const want = expects(t, processors);
-    if (carried && want && carried !== want) {
-      return { ok: false, kind: "type", reason: `Processors.${target}.In: ${ds} carries ${carried} but ${target} reads ${want}` };
+    // A reader must read every schema the dataset carries.
+    const carried = schemaList(datasetSchema(s));
+    const want = schemaList(expects(t, processors));
+    if (carried && want && !carried.every((c) => want.includes(c))) {
+      return { ok: false, kind: "type", reason: `Processors.${target}.In: ${ds} carries ${[...carried].sort().join(", ")} but ${target} reads ${[...want].sort().join(", ")}` };
     }
   }
   if (reaches(graph.edges, target, source)) {

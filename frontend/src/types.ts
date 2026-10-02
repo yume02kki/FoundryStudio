@@ -2,7 +2,7 @@
 //
 // On the canvas, processors and the pipeline's datasets (its DataSets: Kafka topics) are both
 // nodes. An edge dataset -> processor is the processor's In; processor -> dataset its Out.
-// A processor has one of each.
+// A processor has one of each, except that a flink processor (Runtime: flink) may read several datasets.
 
 export const DATASET = "dataset:";
 export const datasetNode = (name: string) => `${DATASET}${name}`;
@@ -23,7 +23,7 @@ export interface Processorspec {
 export interface DatasetSpec {
   Type?: string;
   Config?: string;
-  DataSchema?: string;
+  DataSchema?: string | string[]; // several: different processors write different schemas here
   Topic?: string;
   ConnectionSettings?: ConnectionSettings;
   [key: string]: unknown;

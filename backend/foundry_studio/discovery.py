@@ -80,14 +80,16 @@ class Discovery:
         self._decl_cache: dict[tuple[str, str, str], Decl] = {}  # (project, commit, path) -> Decl
 
     def _schema(self, value, where: str, warnings: list[str]) -> str | None:
+        """A declared schema; a list of them (a processor reading several) as "A | B", how the UI shows it."""
         if value is None:
             warnings.append(f"{where}: not declared")
             return None
-        value = str(value)
+        names = [str(v) for v in value] if isinstance(value, list) else [str(value)]
         known = self.known_schemas() if callable(self.known_schemas) else self.known_schemas
-        if known and value not in known:  # empty: the schemas couldn't be read, so don't flag everything
-            warnings.append(f"{where}: {value!r} is not a schema in configs")
-        return value
+        for name in names:
+            if known and name not in known and name != "Any":  # empty: the schemas couldn't be read, so don't flag everything
+                warnings.append(f"{where}: {name!r} is not a schema in configs")
+        return " | ".join(names)
 
     async def declaration(self, project: str, path: str, commit: str) -> Decl:
         key = (project, commit, path)
