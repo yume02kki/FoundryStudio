@@ -125,9 +125,10 @@ class PipelineSync:
                     raise PipelineError(409, f"{self.workspace} isn't empty and isn't a checkout of {self.repo}")
                 await self._git("clone", "-q", self.repo, ".")
                 changed = True
-            elif await self._git("remote", "get-url", "origin") != self.repo:
-                raise PipelineError(409, f"{self.workspace} is a checkout of another repo, not {self.repo}")
             else:
+                # A moved or renamed repo: follow it. Unrelated history still fails the --ff-only merge below.
+                if await self._git("remote", "get-url", "origin") != self.repo:
+                    await self._git("remote", "set-url", "origin", self.repo)
                 before = await self._git("rev-parse", "HEAD")
                 await self._git("fetch", "-q", "origin")
                 if await self._git("status", "--porcelain", "--untracked-files=no"):
