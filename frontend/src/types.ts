@@ -3,7 +3,7 @@
 // On the canvas, processors and the pipeline's Kafkas (its Kafkas: topics) are both nodes; the code
 // calls a Kafka node a "dataset". Every edge is a Flow entry: Kafka -> processor (it reads it) or
 // processor -> Kafka (it writes it). A processor writes one Kafka and reads one, except that a flink
-// processor (Runtime: flink in its processor.yaml) may read several.
+// processor (Runtime: flink in its operator.yaml) may read several.
 
 export const DATASET = "dataset:";
 export const datasetNode = (name: string) => `${DATASET}${name}`;
@@ -12,7 +12,7 @@ export const datasetName = (id: string) => (isDatasetNode(id) ? id.slice(DATASET
 
 export type ConnectionSettings = Record<string, string | number | boolean>;
 
-/** A Processors: entry. Its types and Runtime come from processor.yaml at its Ref. */
+/** A Processors: entry. Its types and Runtime come from operator.yaml at its Ref. */
 export interface Processorspec {
   Repo?: string;
   Path?: string;
@@ -23,7 +23,7 @@ export interface Processorspec {
 /** A Kafkas: entry. Config names a connection profile; ConnectionSettings override it key by key. */
 export interface DatasetSpec {
   Config?: string;
-  AllowedTypes?: string[]; // class names in Foundry.Common.Models
+  AllowedTypes?: string[]; // type names in schemaRegistry
   Topic?: string;
   ConnectionSettings?: ConnectionSettings;
   [key: string]: unknown;
@@ -56,7 +56,7 @@ export interface Graph {
   warnings?: string[];
 }
 
-/** What manifests refer to (read-only): connection profiles from configRegistry, type names from Foundry.Common.Models. */
+/** What manifests refer to (read-only): connection profiles from configRegistry, type names from schemaRegistry. */
 export interface Catalog {
   profiles: Record<string, ConnectionSettings>; // "kafka/prod" -> its ConnectionSettings
   types: string[];
@@ -138,7 +138,7 @@ export interface Health {
   scriptsCommit: string | null;
   workspace: string;
   configsRepo: string;
-  modelsRepo: string;
+  schemaRegistryRepo: string;
   processorProjects: string[];
   watcher: WatcherStatus;
 }

@@ -17,7 +17,7 @@ def _list(value: str) -> list[str]:
 @dataclass
 class Settings:
     gitlab_url: str = "https://gitlab.com"
-    # Projects scanned for processors (folders with a processor.yaml). None: every project
+    # Projects scanned for processors (folders with an operator.yaml). None: every project
     # the token's user is a member of, re-listed so new projects show up on their own.
     processor_projects: list[str] | None = None
     poll_interval: float = 10.0
@@ -33,9 +33,9 @@ class Settings:
     pipelines_repo: str | None = "https://gitlab.com/foundry-platform/pipelines.git"
     # Connection profiles (kafka/<name>.json) for manifests without ConfigRegistry.Repo, and new ones.
     configs_repo: str = "https://gitlab.com/foundry-platform/common/configRegistry.git"
-    # foundry-common: the classes in src/Foundry.Common.Models are the type names AllowedTypes and
-    # processor.yaml in/out may use.
-    models_repo: str = "https://gitlab.com/foundry-platform/common/foundry-common.git"
+    # schemaRegistry: its types (folders with a metadata.yaml) are the names AllowedTypes and
+    # operator.yaml in/out may use.
+    schema_registry_repo: str = "https://gitlab.com/foundry-platform/common/schemaRegistry.git"
     # "demo" or a directory: serve GitLab from local git repos instead of gitlab.com.
     fake_gitlab: str | None = None
     # Kafka credentials for the live feed, laid out like the processor runtime's:
@@ -68,7 +68,7 @@ class Settings:
         if env.get("STUDIO_WORKSPACE"):
             s.workspace = Path(env["STUDIO_WORKSPACE"]).expanduser().resolve()
         s.configs_repo = env.get("STUDIO_CONFIGS_REPO", s.configs_repo)
-        s.models_repo = env.get("STUDIO_MODELS_REPO", s.models_repo)
+        s.schema_registry_repo = env.get("STUDIO_SCHEMA_REGISTRY_REPO", s.schema_registry_repo)
         s.fake_gitlab = env.get("STUDIO_FAKE_GITLAB") or None
         if "STUDIO_PIPELINES_REPO" in env or s.fake_gitlab:
             s.pipelines_repo = env.get("STUDIO_PIPELINES_REPO") or None

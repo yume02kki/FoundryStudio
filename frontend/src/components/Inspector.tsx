@@ -264,13 +264,13 @@ function ProcessorInspector({ node }: { node: GraphNode }) {
           <input value={spec.Ref ?? ""} readOnly />
         )}
       </Field>
-      <Field label="Runtime" hint="From processor.yaml at this version">
+      <Field label="Runtime" hint="From operator.yaml at this version">
         <span className="mono" data-testid="processor-runtime">{runtimeOf(node, processors)}</span>
       </Field>
-      <Field label="Reads" hint="in: from processor.yaml at this version">
+      <Field label="Reads" hint="in: from operator.yaml at this version">
         <SchemaChip schema={input} />
       </Field>
-      <Field label="Writes" hint="out: from processor.yaml at this version">
+      <Field label="Writes" hint="out: from operator.yaml at this version">
         <SchemaChip schema={output} />
       </Field>
       <Field label="Reads from">
@@ -351,7 +351,7 @@ function DatasetInspector({ node }: { node: GraphNode }) {
       <Field label="Profile" hint="Config: a connection profile from configRegistry">
         <Select value={spec?.Config} options={profiles} onChange={(v) => set({ Config: v })} testId="dataset-profile" />
       </Field>
-      <Field label="Allowed types" hint="AllowedTypes: classes in Foundry.Common.Models (ctrl-click for several)">
+      <Field label="Allowed types" hint="AllowedTypes: types in schemaRegistry (ctrl-click for several)">
         <TypesSelect value={spec?.AllowedTypes ?? []} options={types} onChange={(v) => set({ AllowedTypes: v })} />
       </Field>
       <Field label="Written by">
@@ -464,7 +464,7 @@ function PipelineInspector() {
         </button>
       </p>
       <p className="note">
-        Types from {health?.modelsRepo ?? "foundry-common"}: {(catalog?.types ?? []).join(", ") || "none"}.
+        Types from {health?.schemaRegistryRepo ?? "schemaRegistry"}: {(catalog?.types ?? []).join(", ") || "none"}.
       </p>
       <p className="note">Select a node or an edge to inspect it.</p>
     </>

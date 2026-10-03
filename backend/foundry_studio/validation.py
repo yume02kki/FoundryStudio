@@ -1,8 +1,8 @@
 """Validation passthrough: every rule and every message comes from foundry-platform/common/scripts.
 
 The graph is written to a manifest exactly as Save would write it and handed to the pipelines CI's
-validators: validators/pipelines/typecheck.py's check() (with each processor's processor.yaml at
-its Ref, as discovered, and the classes in Foundry.Common.Models) and cycles.py, plus
+validators: validators/pipelines/typecheck.py's check() (with each processor's operator.yaml at
+its Ref, as discovered, and the types in schemaRegistry) and cycles.py, plus
 lib/pipeline.py's load_profile() for every Kafka's Config, against the configRegistry's profiles
 staged in a temporary checkout. Errors are only *located* here (attached to the node or edge they
 name), never produced.
@@ -39,7 +39,7 @@ def _types(label: str | None) -> list[str]:
 
 
 def declarations(graph: dict, infos: Iterable[ProcessorInfo]) -> dict[str, dict]:
-    """Each processor's processor.yaml (in, out, Runtime) at its Ref (no Ref: the default branch)."""
+    """Each processor's operator.yaml (in, out, Runtime) at its Ref (no Ref: the default branch)."""
     infos = list(infos)
     out = {}
     for n in graph.get("nodes", []):
@@ -66,7 +66,7 @@ class Validator:
     def _messages(self, manifest: dict, configs: dict | None, types: list[str] | None, decls: dict) -> list[str]:
         p = self.foundry.pipeline
         kafkas = p.section(manifest, "Kafkas")
-        # Unknown types (the models repo couldn't be read): accept what the manifest names rather than flag it all.
+        # Unknown types (schemaRegistry couldn't be read): accept what the manifest names rather than flag it all.
         known = set(types) if types is not None else {t for k in kafkas.values() if isinstance(k, dict)
                                                        for t in p.types_of(k.get("AllowedTypes"))}
         messages = self.foundry.typecheck.check(manifest, decls, known)

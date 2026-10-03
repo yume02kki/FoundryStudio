@@ -56,8 +56,7 @@ def test_errors_are_located(client):
     kafka(g, "ConvertedPackets")["datasetSpec"]["Config"] = "kafka/missing"
     del kafka(g, "Input")["datasetSpec"]["Topic"]
     errors = {e["message"]: e for e in validate(client, g)}
-    assert errors["Kafkas.Output.AllowedTypes: unknown type 'Nope' (known: DecodeEnrichment, EnrichedPackets, "
-                  "IspEnrichment, Packets, XmlPackets)"]["node"] == "dataset:Output"
+    assert errors["Kafkas.Output.AllowedTypes: 'Nope' is not in schemaRegistry"]["node"] == "dataset:Output"
     assert errors["Kafkas.ConvertedPackets.Config: Config 'kafka/missing' not found (known: kafka/load, kafka/prod)"][
         "node"] == "dataset:ConvertedPackets"
     assert errors["Kafkas.Input: missing Topic"]["node"] == "dataset:Input"
@@ -72,7 +71,7 @@ def test_type_mismatch_lands_on_the_edge(client):
 def test_pinned_ref_uses_that_versions_processor_yaml(client, demo_root):
     # A new release of Decode that reads XmlPackets: pinning it makes the existing wire wrong.
     repo = demo_root / demo.OPERATORS / "decodingprocessor"
-    (repo / "processor.yaml").write_text("name: Decode\ndescription: d\nRuntime: dotnet\nin: [XmlPackets]\nout: [EnrichedPackets]\n")
+    (repo / "operator.yaml").write_text("name: Decode\ndescription: d\nRuntime: dotnet\nin: [XmlPackets]\nout: [EnrichedPackets]\n")
     demo.tag(demo_root, "decodingprocessor", "v2.0.0")
     client.app.state.services.watcher.full_rescan_interval = 0
     client.portal.call(client.app.state.services.watcher.poll_once)
@@ -82,7 +81,7 @@ def test_pinned_ref_uses_that_versions_processor_yaml(client, demo_root):
     messages = [e["message"] for e in validate(client, g)]
     assert "Flow: ConvertedPackets -> Decode: ConvertedPackets allows Packets but Decode reads XmlPackets" in messages
     decode["Ref"] = "main"
-    assert validate(client, g)  # the default branch has the new processor.yaml too
+    assert validate(client, g)  # the default branch has the new operator.yaml too
     decode["Ref"] = "v1.0.0"
     assert validate(client, g) == []
 
@@ -116,7 +115,8 @@ def test_ci_validators_agree(client, demo_root, tmp_path):
     env = {**__import__("os").environ}
     cli = subprocess.run(
         [sys.executable, str(SCRIPTS_DIR / "validators" / "pipelines" / "typecheck.py"), str(manifest),
-         "--models", str(demo_root / demo.MODELS)],
+         "--schema-registry", str(demo_root / demo.SCHEMA_REGISTRY),
+         "--config-registry", str(demo_root / demo.CONFIGS)],
         capture_output=True, text=True, env=env)
     assert cli.returncode == 1
     cli_errors = sorted(line.removeprefix(f"error: {manifest}: ") for line in cli.stdout.splitlines())

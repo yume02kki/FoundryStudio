@@ -2,7 +2,7 @@
 
 A visual editor for Foundry pipelines' `PipelineManifest.yaml`, in the spirit of Palantir Foundry's Pipeline Builder. Studio only edits and displays manifests; whether one is valid is decided by `manifest.py` from [foundry-platform/common/scripts](https://gitlab.com/foundry-platform/common/scripts), the same check its `validate` CLI runs.
 
-On the canvas, **datasets** (the manifest's `DataSets`: Kafka topics) and **processors** are both nodes: `dataset → processor → dataset`. A processor reads one dataset (`In`) and writes one (`Out`); a dataset can feed several processors, and several processors can write one dataset. GitLab is watched live: any project with a `processor.yaml` shows up as a building block, without a reload.
+On the canvas, **datasets** (the manifest's `DataSets`: Kafka topics) and **processors** are both nodes: `dataset → processor → dataset`. A processor reads one dataset (`In`) and writes one (`Out`); a dataset can feed several processors, and several processors can write one dataset. GitLab is watched live: any project with an `operator.yaml` shows up as a building block, without a reload.
 
 - **Backend:** Python + FastAPI (`backend/`). It imports `manifest.py` as a library, so the UI and the CLI can't disagree about what a valid pipeline is.
 - **Frontend:** React + TypeScript + Vite, with React Flow (`@xyflow/react`) for the canvas (`frontend/`).
@@ -34,7 +34,7 @@ What a manifest refers to is read through the GitLab API, read-only:
 |---|---|---|
 | Connection profiles | the manifest's `Configs.Repo` at `Configs.Ref` | the Profile picker, validation, Live data |
 | Schemas | the default configs repo's (`STUDIO_CONFIGS_REPO`) `schemas/*.yaml` | the Schema picker and field list, validation, Live data's checks |
-| Processor schemas | each processor's `processor.yaml` at the processor's `Ref` | port colours, wiring rules, validation |
+| Processor schemas | each processor's `operator.yaml` at the processor's `Ref` | port colours, wiring rules, validation |
 
 Nothing here creates topics or edits profiles or schemas.
 
@@ -83,7 +83,7 @@ A pipeline is known by its folder; its `Name` is a field. A new pipeline gets a 
 - **Processors** tab: drag a card onto the canvas. It's added without a `Ref` (its default branch). Pin a tag in the Inspector; a pinned node shows an update badge when a newer tag exists.
 - **Datasets** tab: this pipeline's datasets, the datasets other pipelines in the workspace define (drag one in to reuse its topic), and the profiles (read-only). **+ Dataset** defines a new one.
 - **Wiring:** drag from a port to a port. Compatible ports light up while dragging; a refused wire says why in manifest.py's words, e.g. `XmlToJson writes Packets but Output carries EnrichedPackets`, or that a processor already has its `In`.
-- **Inspector:** a processor's version, schemas (from `processor.yaml`) and consumer group (`<Name>.<processor>`); a dataset's topic, profile, schema (with its fields) and optional inline `ConnectionSettings` overrides, with the profile's settings shown read-only; with nothing selected, the pipeline's `Configs` repo and ref.
+- **Inspector:** a processor's version, schemas (from `operator.yaml`) and consumer group (`<Name>.<processor>`); a dataset's topic, profile, schema (with its fields) and optional inline `ConnectionSettings` overrides, with the profile's settings shown read-only; with nothing selected, the pipeline's `Configs` repo and ref.
 - **Validation** runs `manifest.py`'s `check()` on every change; the top bar shows its errors verbatim, and clicking one zooms to the node or connection it's about.
 
 The manifest is written in one **canonical form** (the pipelines' own layout and comments, processors in topological order, datasets in data-flow order), so the same pipeline always produces the same bytes however it was dragged and wired.
@@ -96,7 +96,7 @@ It's **read-only**: Studio assigns partitions under a throwaway group id, never 
 
 ## Processor discovery and real-time updates
 
-Studio scans projects for a **`processor.yaml`**, at the repo root or in any folder:
+Studio scans projects for a **`operator.yaml`**, at the repo root or in any folder:
 
 ```yaml
 name: Isp
@@ -143,10 +143,10 @@ backend/foundry_studio/
   app.py           FastAPI routes, SSE (events, live data), webhook
   foundry.py       manifest.py loader, error locator
   manifest.py      graph <-> PipelineManifest.yaml (canonical writer)
-  validation.py    manifest.py's check() + processor.yaml schemas, edge checks, dataset endpoints
+  validation.py    manifest.py's check() + operator.yaml schemas, edge checks, dataset endpoints
   sources.py       connection profiles and schemas through the GitLab API
   pipelines.py     the workspace: pipeline folders
-  discovery.py     processor.yaml folders and their versions
+  discovery.py     operator.yaml folders and their versions
   watcher.py       every member project: polling + webhooks -> event bus
   peek.py          Live data: read-only topic feeds, schema checks
   gitlab.py        GitLab REST client

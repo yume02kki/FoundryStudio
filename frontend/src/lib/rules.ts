@@ -5,8 +5,8 @@
 //
 // A wire is a Flow entry and always joins a processor and a Kafka: Kafka -> processor (it reads it),
 // processor -> Kafka (it writes it). A processor writes one Kafka and, unless its Runtime is flink,
-// reads one. Its types (in, out) and Runtime are those its processor.yaml declares at its Ref.
-// "Schema" in the names below means a type: a class name from Foundry.Common.Models.
+// reads one. Its types (in, out) and Runtime are those its operator.yaml declares at its Ref.
+// "Schema" in the names below means a type: a type name from schemaRegistry.
 
 import type { GraphEdge, GraphNode, ProcessorInfo } from "../types";
 import { findInfo, versionFor } from "./versions";
@@ -21,7 +21,7 @@ export type RefusalKind = "kind" | "duplicate" | "type" | "cycle" | "self" | "si
 
 export type Processors = Record<string, ProcessorInfo>;
 
-/** A list of types, or "A | B" as processor.yaml lists show: undefined for none. */
+/** A list of types, or "A | B" as operator.yaml lists show: undefined for none. */
 export function schemaList(value: string | string[] | null | undefined): string[] | undefined {
   const list = Array.isArray(value) ? value.map(String) : value ? value.split(" | ") : [];
   return list.length ? list : undefined;
@@ -37,12 +37,12 @@ export function datasetSchema(node: GraphNode | undefined): string | undefined {
   return schemaList(node?.datasetSpec?.AllowedTypes)?.join(" | ");
 }
 
-/** A processor's Runtime, from its processor.yaml at its Ref (dotnet when unknown). */
+/** A processor's Runtime, from its operator.yaml at its Ref (dotnet when unknown). */
 export function runtimeOf(node: GraphNode | undefined, processors: Processors): "dotnet" | "flink" {
   return versionFor(findInfo(node?.processor, Object.values(processors)), node?.processor?.Ref)?.runtime ?? "dotnet";
 }
 
-/** A processor's in and out schemas: its processor.yaml at its Ref (no Ref: the default branch). */
+/** A processor's in and out schemas: its operator.yaml at its Ref (no Ref: the default branch). */
 export function processorschemas(node: GraphNode | undefined, processors: Processors): { input?: string; output?: string } {
   const v = versionFor(findInfo(node?.processor, Object.values(processors)), node?.processor?.Ref);
   return { input: schemaList(v?.input)?.join(" | "), output: schemaList(v?.output)?.join(" | ") };

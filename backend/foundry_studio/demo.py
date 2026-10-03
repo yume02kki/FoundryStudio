@@ -6,8 +6,8 @@
     python -m foundry_studio.demo remove Deduplicate
 
 The repos mirror the real ones: foundry-platform/common/configRegistry (connection profiles),
-foundry-platform/common/foundry-common (the model classes, i.e. the type names) and one
-foundry-platform/operators project per processor, each with a processor.yaml at its root. The
+foundry-platform/common/schemaRegistry (the type names) and one foundry-platform/operators
+project per processor, each with an operator.yaml at its root. The
 workspace holds PacketPipeline. Nothing here needs a token, Docker or Kafka; Live data shows
 generated records.
 """
@@ -25,7 +25,7 @@ from .config import REPO_ROOT
 
 DEFAULT_ROOT = REPO_ROOT / ".demo-gitlab"
 CONFIGS = "foundry-platform/common/configRegistry"
-MODELS = "foundry-platform/common/foundry-common"
+SCHEMA_REGISTRY = "foundry-platform/common/schemaRegistry"
 OPERATORS = "foundry-platform/operators"
 
 # Fixed dates keep commit SHAs identical across `init` runs.
@@ -37,9 +37,16 @@ PROFILES = {
     "kafka/load.json": ('{\n  "ConnectionSettings": {"Brokers": "kafka-load:9092", "SecurityProtocol": "SASL_SSL",\n'
                         '    "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-load-creds"}\n}\n'),
 }
-MODEL_TYPES = ("XmlPackets", "Packets", "DecodeEnrichment", "IspEnrichment", "EnrichedPackets")
-MODEL_FILES = {f"src/Foundry.Common.Models/{t}.cs": f"namespace Foundry.Common.Models;\n\npublic sealed class {t}\n{{\n    public Guid Guid {{ get; set; }}\n}}\n"
-               for t in MODEL_TYPES}
+TYPES = {  # type -> owner; EnrichedPackets has no schema, like the real one
+    "XmlPackets": "xmltojsonprocessor", "Packets": "xmltojsonprocessor", "DecodeEnrichment": "decodingprocessor",
+    "IspEnrichment": "IspEnricher", "EnrichedPackets": "packetjoiner",
+}
+REGISTRY_FILES = {
+    **{f"{t}/metadata.yaml": f"owner: {o}\n" + ("ignoreSchema: true\n" if t == "EnrichedPackets" else "")
+       for t, o in TYPES.items()},
+    **{f"{t}/v1.json": ('{\n  "title": "%s",\n  "type": "object",\n  "properties": {"guid": {"type": "string", "format": "guid"}}\n}\n' % t)
+       for t in TYPES if t != "EnrichedPackets"},
+}
 PROCESSORS = {  # project -> (name, in, out, description)
     "xmltojsonprocessor": ("XmlToJson", "XmlPackets", "Packets", "Converts XML packets to JSON; data stays base64."),
     "decodingprocessor": ("Decode", "Packets", "EnrichedPackets", "Decodes the base64 payload to text."),
@@ -114,13 +121,13 @@ def processor_files(name: str, input: str, output: str, version: str = "1.0.0",
                       description: str | None = None) -> dict[str, str]:
     """A processor repo in the shape of the real ones (minimal: no Kafka loop)."""
     return {
-        "processor.yaml": (f"name: {name}\ndescription: {description or name}\nRuntime: dotnet\n\n"
+        "operator.yaml": (f"name: {name}\ndescription: {description or name}\nRuntime: dotnet\n\n"
                            f"in: [{input}]\nout: [{output}]\n"),
         f"{name}.csproj": (
             '<Project Sdk="Microsoft.NET.Sdk.Worker">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n'
             f"    <Version>{version}</Version>\n  </PropertyGroup>\n  <ItemGroup>\n"
             '    <PackageReference Include="Foundry.Common.Configuration" Version="2.*" />\n  </ItemGroup>\n</Project>\n'),
-        "Program.cs": (f"using Foundry.Common.Models;\n\n// Demo stand-in: {input} -> {output}.\n"
+        "Program.cs": (f"// Demo stand-in: {input} -> {output}.\n"
                        f"static {output} Processor({input} p) => new() {{ Guid = p.Guid }};\n"),
     }
 
@@ -143,7 +150,7 @@ def init(root: Path = DEFAULT_ROOT) -> Path:
     if root.exists():
         shutil.rmtree(root)
     _repo(root, CONFIGS, PROFILES, "Kafka connection profiles")
-    _repo(root, MODELS, MODEL_FILES, "Packet models")
+    _repo(root, SCHEMA_REGISTRY, REGISTRY_FILES, "Pipeline types")
     for project, (name, i, o, desc) in PROCESSORS.items():
         _repo(root, f"{OPERATORS}/{project}", processor_files(name, i, o, description=desc), f"{name} 1.0.0", "v1.0.0")
     # A plain folder (not a git repo), so the fake GitLab doesn't list it as a project.
@@ -169,7 +176,7 @@ def add(root: Path, name: str, input: str, output: str, description: str | None 
 
 def remove(root: Path, name: str) -> None:
     repo = root / OPERATORS / name
-    _git(repo, "rm", "-q", "processor.yaml")
+    _git(repo, "rm", "-q", "operator.yaml")
     _git(repo, "commit", "-q", "-m", f"{name} is no longer a processor")
 
 

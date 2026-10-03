@@ -4,7 +4,7 @@ import type { Processors } from "./rules";
 import { inputSockets, moveSocket, ordered, outputSockets, wires } from "./sockets";
 
 const info = (name: string, input: string, output: string): ProcessorInfo => {
-  const v = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "processor.yaml", warnings: [], web_url: "", runtime: "dotnet" as const };
+  const v = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "operator.yaml", warnings: [], web_url: "", runtime: "dotnet" as const };
   return { id: `x/${name}:`, project: `x/${name}`, path: "", name, description: "", repo: `https://gitlab.com/x/${name}.git`, web_url: "", input, output, warnings: [], latest: "abc", head: "abc", versions: [v], runtime: "dotnet" };
 };
 const processors: Processors = Object.fromEntries(

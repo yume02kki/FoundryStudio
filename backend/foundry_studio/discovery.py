@@ -1,7 +1,7 @@
 """Processor discovery: find processor folders in GitLab projects and list their versions.
 
-A processor is any folder with a `processor.yaml` (name, description, Runtime, in, out: lists of
-type names, the classes in Foundry.Common.Models). A version from before its folder had one
+A processor is any folder with an `operator.yaml` (name, description, Runtime, in, out: lists of
+type names, the types in schemaRegistry). A version from before its folder had one
 carries a warning.
 """
 
@@ -17,7 +17,7 @@ import yaml
 
 from .gitlab import GitLab
 
-DECL_FILE = "processor.yaml"
+DECL_FILE = "operator.yaml"  # scripts' lib/pipeline.py DECL_FILE
 RUNTIMES = ("dotnet", "flink")
 _SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 
@@ -37,7 +37,7 @@ class Decl:
     input: str | None
     output: str | None
     description: str
-    source: str  # "processor.yaml" | "none"
+    source: str  # "operator.yaml" | "none"
     warnings: list[str] = field(default_factory=list)
     runtime: str = "dotnet"
 
@@ -95,7 +95,7 @@ class Discovery:
         known = self.known_types() if callable(self.known_types) else self.known_types
         for name in names:
             if known and name not in known:  # empty: the types couldn't be read, so don't flag everything
-                warnings.append(f"{where}: {name!r} is not a class in Foundry.Common.Models")
+                warnings.append(f"{where}: {name!r} is not a type in schemaRegistry")
         return " | ".join(names)
 
     async def declaration(self, project: str, path: str, commit: str) -> Decl:

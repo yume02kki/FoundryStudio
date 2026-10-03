@@ -3,7 +3,7 @@ import type { GraphNode, ProcessorInfo } from "../types";
 import { checkConnection, emits, expects, inputsOf, outputsOf, shortReason, type GraphLike, type Processors } from "./rules";
 
 const info = (name: string, input: string, output: string, tagged?: [string, string]): ProcessorInfo => {
-  const branch = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "processor.yaml", warnings: [], web_url: "", runtime: "dotnet" as const };
+  const branch = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "operator.yaml", warnings: [], web_url: "", runtime: "dotnet" as const };
   const tag = tagged && { ...branch, ref: "v1.0.0", label: "v1.0.0", kind: "tag" as const, commit: "def", input: tagged[0], output: tagged[1] };
   return {
     id: `foundry-platform/operators/${name}:`, project: `foundry-platform/operators/${name}`, path: "", name, description: "",
@@ -27,7 +27,7 @@ const base = (): GraphLike => ({
 });
 
 describe("types", () => {
-  it("come from processor.yaml at the Ref for processors and AllowedTypes for Kafkas", () => {
+  it("come from operator.yaml at the Ref for processors and AllowedTypes for Kafkas", () => {
     const g = base();
     expect(emits(g.nodes[0], processors)).toBe("Packets");
     expect(expects(g.nodes[1], processors)).toBe("Packets");

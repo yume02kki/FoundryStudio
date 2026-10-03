@@ -2,8 +2,8 @@
 
 * connection profiles, `kafka/<name>.json` in the configRegistry repo the manifest names
   (`ConfigRegistry: {Repo, Ref}`), e.g. kafka/prod;
-* type names: the classes in foundry-common's Foundry.Common.Models (src/Foundry.Common.Models/*.cs),
-  which manifests' AllowedTypes and processor.yaml's in/out name.
+* type names: the types in schemaRegistry (`<Type>/metadata.yaml`), which manifests' AllowedTypes
+  and operator.yaml's in/out name.
 
 Both are cached for a few seconds, so validating on every edit doesn't hit GitLab each time,
 and a failed refresh keeps serving the last good copy. Studio never writes to either repo.
@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from types import ModuleType
@@ -26,12 +27,12 @@ class SourceError(Exception):
 
 class Sources:
     def __init__(self, gitlab: GitLab, gitlab_url: str, pipeline: ModuleType, configs_repo: str,
-                 models_repo: str, ttl: float = 30.0):
+                 schema_registry_repo: str, ttl: float = 30.0):
         self.gitlab = gitlab
         self.gitlab_url = gitlab_url.rstrip("/")
         self.m = pipeline
         self.configs_repo = configs_repo
-        self.models_repo = models_repo
+        self.schema_registry_repo = schema_registry_repo
         self.ttl = ttl
         self._cache: dict[tuple, tuple[float, dict]] = {}
         self._locks: dict[tuple, asyncio.Lock] = {}
@@ -94,17 +95,16 @@ class Sources:
         return await self._cached(("configs", repo, ref), load)
 
     async def types(self) -> list[str]:
-        """The class names in Foundry.Common.Models, from the models repo's default branch."""
+        """The type names in schemaRegistry (folders with a metadata.yaml), from its default branch."""
         async def load():
-            name = self.project_of(self.models_repo)
+            name = self.project_of(self.schema_registry_repo)
             project = await self.gitlab.get_project(name)
-            _, files = await self._files(
-                name, project["default_branch"],
-                lambda p: p.startswith(f"{self.m.MODELS_DIR}/") and p.endswith(".cs"))
-            found = set()
-            for data in files.values():
-                found |= set(self.m.CLASS_RE.findall(data.decode(errors="replace")))
-            return {"types": sorted(found - {"IpAddressJsonConverter"})}
+            commit = await self.gitlab.get_commit(name, project["default_branch"])
+            if commit is None:
+                raise SourceError(f"{name}@{project['default_branch']} not found")
+            tree = await self.gitlab.list_tree(name, commit["id"], recursive=True)
+            meta = re.compile(rf"^([^/]+)/{re.escape(self.m.META_FILE)}$")
+            return {"types": sorted(m.group(1) for e in tree if e["type"] == "blob" and (m := meta.match(e["path"])))}
 
         types = (await self._cached(("types",), load))["types"]
         self.type_names = set(types)

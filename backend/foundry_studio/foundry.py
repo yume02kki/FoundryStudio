@@ -1,7 +1,7 @@
 """Access to the pinned foundry-platform/common/scripts checkout: its validators as a library.
 
 scripts decides what a valid PipelineManifest.yaml is: lib/pipeline.py (manifest format, profiles,
-model types), validators/pipelines/typecheck.py and cycles.py, the same checks the pipelines CI
+schemaRegistry types), validators/pipelines/typecheck.py and cycles.py, the same checks the pipelines CI
 runs. Nothing here re-implements a rule; we only import them and attach each error to the node or
 edge it talks about.
 """
@@ -79,7 +79,7 @@ class Foundry:
 
     @cached_property
     def pipeline(self) -> ModuleType:
-        """lib/pipeline.py: the manifest format, profiles, model types. Loaded as `pipeline`, the name
+        """lib/pipeline.py: the manifest format, profiles, schemaRegistry types. Loaded as `pipeline`, the name
         the validators import it by."""
         return _load("pipeline", self.root / "lib" / "pipeline.py")
 

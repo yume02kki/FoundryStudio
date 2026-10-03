@@ -54,14 +54,14 @@ async def test_folders_with_processor_yaml_in_a_monorepo(demo_root, fake):
     repo.mkdir(parents=True)
     demo._git(repo, "init", "-q", "-b", "main")
     commit(repo, {
-        "GeoTag/processor.yaml": "name: GeoTag\ndescription: g\nRuntime: dotnet\nin: [Packets]\nout: [Packets]\n",
-        "GeoTag/bin/Release/processor.yaml": "name: build output, not a processor\n",
-        "Shout/processor.yaml": "name: Shout\ndescription: s\nRuntime: flink\nin: [Packets]\nout: [Bogus]\n",
+        "GeoTag/operator.yaml": "name: GeoTag\ndescription: g\nRuntime: dotnet\nin: [Packets]\nout: [Packets]\n",
+        "GeoTag/bin/Release/operator.yaml": "name: build output, not a processor\n",
+        "Shout/operator.yaml": "name: Shout\ndescription: s\nRuntime: flink\nin: [Packets]\nout: [Bogus]\n",
     }, "two processors", tag="GeoTag/v0.1.0")
     found = await discovery(fake).scan_project("team-b/enrichers")
     assert set(found) == {"team-b/enrichers:GeoTag", "team-b/enrichers:Shout"}
     assert found["team-b/enrichers:GeoTag"].latest == "GeoTag/v0.1.0"
-    assert found["team-b/enrichers:Shout"].warnings == ["processor.yaml out: 'Bogus' is not a class in Foundry.Common.Models"]
+    assert found["team-b/enrichers:Shout"].warnings == ["operator.yaml out: 'Bogus' is not a type in schemaRegistry"]
     assert found["team-b/enrichers:Shout"].runtime == "flink"
 
     before = found["team-b/enrichers:GeoTag"].head

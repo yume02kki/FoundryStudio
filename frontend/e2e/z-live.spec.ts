@@ -22,7 +22,7 @@ test("a new tag and a new processor show up live; the picked version is saved as
   await expect(page.getByTestId("node-Decode")).toContainText("v1.1.0");
   await expect(page.getByTestId("update-Decode")).toHaveCount(0);
 
-  // A new repo with a processor.yaml appears as a card.
+  // A new repo with a operator.yaml appears as a card.
   demo("add", "Deduplicate", "Packets", "Packets", "Drops repeated guids");
   await expect(page.getByTestId("card-Deduplicate")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByTestId("card-Deduplicate")).toContainText("Packets");

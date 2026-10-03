@@ -10,7 +10,7 @@ const v = (ref: string, label: string, kind: "tag" | "branch", commit: string): 
   committed_date: null,
   input: "EncodedPackets",
   output: "Packets",
-  source: "processor.yaml",
+  source: "operator.yaml",
   warnings: [],
   web_url: "",
   runtime: "dotnet",

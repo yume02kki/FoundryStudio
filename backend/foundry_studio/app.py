@@ -62,7 +62,8 @@ class Services:
         self.workspace = workspace or settings.workspace or REPO_ROOT / "workspace"
         self.validator = Validator(foundry)
         self.pipelines = PipelineStore(self.workspace)
-        self.sources = Sources(gitlab, settings.gitlab_url, foundry.pipeline, settings.configs_repo, settings.models_repo)
+        self.sources = Sources(gitlab, settings.gitlab_url, foundry.pipeline, settings.configs_repo,
+                               settings.schema_registry_repo)
         self.discovery = Discovery(gitlab, lambda: self.sources.type_names)
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.processor_projects,
@@ -72,7 +73,7 @@ class Services:
                                if settings.pipelines_repo else None)
 
     async def context(self, graph: dict) -> dict:
-        """What validating a graph needs besides the graph: profiles, model types, processor.yaml files."""
+        """What validating a graph needs besides the graph: profiles, schemaRegistry types, operator.yaml files."""
         configs = graph.get("configs") or {}
         ctx: dict = {"configs": None, "configs_error": None, "types": None,
                      "decls": declarations(graph, self.watcher.processors.values())}
@@ -148,7 +149,7 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
         try:
             await svc.sources.types()  # before discovery, so it can flag unknown types
         except SourceError as e:
-            log.warning("can't read the model types from %s: %s", svc.settings.models_repo, e)
+            log.warning("can't read the types from %s: %s", svc.settings.schema_registry_repo, e)
         if start_watcher:
             await svc.watcher.start()
         yield
@@ -175,14 +176,14 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             "scriptsCommit": s.foundry.commit,
             "workspace": str(s.workspace),
             "configsRepo": s.settings.configs_repo,
-            "modelsRepo": s.settings.models_repo,
+            "schemaRegistryRepo": s.settings.schema_registry_repo,
             "processorProjects": s.watcher.projects_with_processors,
             "watcher": s.watcher.status(),
         }
 
     @app.get("/api/catalog")
     async def catalog(request: Request, repo: str | None = None, ref: str | None = None):
-        """What manifests can refer to (read-only): connection profiles and model types."""
+        """What manifests can refer to (read-only): connection profiles and schemaRegistry types."""
         s = svc(request)
         out: dict = {"profiles": {}, "types": [], "configs": None, "errors": {}}
         try:

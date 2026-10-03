@@ -2,7 +2,7 @@
 
 Which projects: every project the token's user is a member of (re-listed every
 `discovery_interval` seconds, so new projects show up on their own), or a fixed list
-(STUDIO_PROCESSOR_PROJECTS). Any folder with a processor.yaml in any of them is a
+(STUDIO_PROCESSOR_PROJECTS). Any folder with an operator.yaml in any of them is a
 processor. The pipelines repo (one folder per pipeline) is watched too, and the workspace,
 a checkout of it, follows its pushes (PipelineSync).
 

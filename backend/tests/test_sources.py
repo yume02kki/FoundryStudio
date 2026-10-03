@@ -12,7 +12,7 @@ from foundry_studio.sources import SourceError, Sources
 
 def sources(fake, foundry, ttl=30.0) -> Sources:
     return Sources(fake, "https://gitlab.com", foundry.pipeline, "https://gitlab.com/foundry-platform/common/configRegistry.git",
-                   "https://gitlab.com/foundry-platform/common/foundry-common.git", ttl=ttl)
+                   "https://gitlab.com/foundry-platform/common/schemaRegistry.git", ttl=ttl)
 
 
 @pytest.mark.anyio
@@ -23,7 +23,7 @@ async def test_profiles_and_types(fake, foundry):
                                                  "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-internal-creds"}
     assert set(configs["files"]) == {"kafka/prod.json", "kafka/load.json"} and len(configs["commit"]) == 40
     types = await s.types()
-    assert types == sorted(demo.MODEL_TYPES) and set(types) == s.type_names
+    assert types == sorted(demo.TYPES) and set(types) == s.type_names
 
 
 @pytest.mark.anyio
@@ -53,5 +53,5 @@ def test_catalog_endpoint(services):
         cat = c.get("/api/catalog").json()
         assert list(cat["profiles"]) == ["kafka/load", "kafka/prod"] and cat["errors"] == {}
         assert cat["configs"]["repo"] == "https://gitlab.com/foundry-platform/common/configRegistry.git"
-        assert cat["types"] == sorted(demo.MODEL_TYPES)
+        assert cat["types"] == sorted(demo.TYPES)
         assert "configs" in c.get("/api/catalog?ref=nope").json()["errors"]
