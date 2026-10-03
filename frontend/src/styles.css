@@ -1639,9 +1639,8 @@ button.tab:hover:not(.active) {
   bottom: -1px;
   left: -4px;
   width: 22px;
-  border: 1px solid transparent;
+  border: 0 solid transparent;
   border-left-width: 4px;
-  border-right: 0;
   border-radius: 18px 0 0 18px;
   background: var(--stripe) border-box;
   mask: linear-gradient(#000 0 0) padding-box exclude, linear-gradient(#000 0 0) border-box;
