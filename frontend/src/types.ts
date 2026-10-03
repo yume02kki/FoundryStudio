@@ -189,4 +189,5 @@ export interface FeedState {
   partitions?: number;
   messages: FeedMessage[]; // newest first
   count: number;
+  recent?: number[]; // times of the messages produced in the last minute, beyond the ones kept
 }

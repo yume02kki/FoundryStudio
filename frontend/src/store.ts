@@ -1,6 +1,7 @@
 import { applyEdgeChanges, applyNodeChanges, type Edge, type EdgeChange, type Node, type NodeChange } from "@xyflow/react";
 import { create } from "zustand";
 import { autoLayout } from "./lib/layout";
+import { messageTime } from "./lib/feedHealth";
 import {
   datasetName,
   datasetNode,
@@ -19,7 +20,7 @@ import {
   type WatcherStatus,
 } from "./types";
 
-const FEED_KEEP = 200;
+const FEED_KEEP = 200; // messages kept per feed; rates count every message (FeedState.recent)
 const idleFeed = (): FeedState => ({ state: "idle", messages: [], count: 0 });
 
 export type PipelineNodeData = { spec: GraphNode };
@@ -328,8 +329,10 @@ export const useStudio = create<State>()((set, get) => ({
   feedMessage: (key, message) =>
     set((s) => {
       const f = s.feeds[key] ?? idleFeed();
+      const since = Date.now() - 60_000;
+      const recent = [messageTime(message), ...(f.recent ?? [])].filter((t) => t >= since);
       return {
-        feeds: { ...s.feeds, [key]: { ...f, messages: [message, ...f.messages].slice(0, FEED_KEEP), count: f.count + 1 } },
+        feeds: { ...s.feeds, [key]: { ...f, messages: [message, ...f.messages].slice(0, FEED_KEEP), count: f.count + 1, recent } },
       };
     }),
 

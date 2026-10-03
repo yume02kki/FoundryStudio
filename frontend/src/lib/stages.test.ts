@@ -62,6 +62,13 @@ describe("pairing", () => {
     expect(pairs[0].id).toBe("a"); // newest first
     // Inputs from before the output's oldest record in view aren't judged.
     expect(pairRecords([msg('{"guid":"b"}', 9)], [msg('{"guid":"z"}', 4)], NOW)[1].status).toBe("pending");
+    // A windowed processor (outputs ~11 s after their inputs) isn't blamed for records still in a window.
+    const windowed = pairRecords(
+      [msg('{"guid":"a"}', 30), msg('{"guid":"b"}', 12)],
+      [msg('{"guid":"a"}', 19), msg('{"guid":"y"}', 1), msg('{"guid":"x"}', 25)],
+      NOW,
+    );
+    expect(Object.fromEntries(windowed.map((p) => [p.id, p.status]))).toMatchObject({ a: "processed", b: "pending" });
   });
 });
 

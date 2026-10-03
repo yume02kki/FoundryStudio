@@ -29,7 +29,7 @@ export function ago(ms: number): string {
 export function feedHealth(f: FeedState, now: number): FeedHealth {
   const times = f.messages.map(messageTime);
   const lastAt = times.length ? Math.max(...times) : null;
-  const perMinute = times.filter((t) => t >= now - 60_000).length;
+  const perMinute = (f.recent ?? times).filter((t) => t >= now - 60_000).length;
   const mismatches = f.messages.filter((m) => m.check.ok === false).length;
   const base = { perMinute, lastAt, mismatches };
   switch (f.state) {
