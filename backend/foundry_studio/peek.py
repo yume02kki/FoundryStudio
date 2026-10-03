@@ -220,6 +220,33 @@ class FormatChecker:
         return {"ok": None, "detail": "no schema check"}
 
 
+class UnionChecker:
+    """A union DataSchema ([A, B]): a message must match one of them."""
+
+    def __init__(self, checkers: list[FormatChecker]):
+        self.checkers = checkers
+        self.schema = " | ".join(c.schema or "?" for c in checkers)
+
+    def check(self, value: bytes | None) -> dict:
+        results = [c.check(value) for c in self.checkers]
+        if hit := next((r for r in results if r["ok"]), None):
+            return hit
+        if all(r["ok"] is None for r in results):
+            return results[0]
+        return {"ok": False, "detail": f"matches none of {self.schema}: "
+                                      + "; ".join(r["detail"] for r in results if r["ok"] is False)}
+
+
+def checker_for(names: list[str], schemas: dict) -> FormatChecker | UnionChecker:
+    """The checker for a dataset's DataSchema (a name, a union of names, or none)."""
+    def one(name):
+        spec = schemas.get(name)
+        return FormatChecker(name, spec["file"] if spec else None, spec["data"] if spec else None)
+    if len(names) == 1:
+        return one(names[0])
+    return UnionChecker([one(n) for n in names]) if names else FormatChecker(None, None, None)
+
+
 def _iso(ms: int | None) -> str | None:
     if not ms or ms <= 0:
         return None
@@ -237,7 +264,7 @@ def _preview(value: bytes | None) -> tuple[str | None, bool, str]:
 
 
 def message_event(partition: int, offset: int, ts_ms: int | None, key: bytes | None, value: bytes | None,
-                  checker: FormatChecker) -> dict:
+                  checker) -> dict:
     text, truncated, encoding = _preview(value)
     return {
         "type": "message", "partition": partition, "offset": offset, "timestamp": _iso(ts_ms),

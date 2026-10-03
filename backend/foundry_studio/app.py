@@ -22,7 +22,7 @@ from .fake_gitlab import FakeGitLab
 from .foundry import Foundry
 from .gitlab import GitLab, HttpGitLab
 from .manifest import graph_to_manifest
-from .peek import FormatChecker, PeekError, bind, client_config, demo_feed, kafka_feed
+from .peek import PeekError, bind, checker_for, client_config, demo_feed, kafka_feed
 from .pipelines import PipelineError, PipelineStore, PipelineSync
 from .sources import SourceError, Sources
 from .validation import Validator, declarations
@@ -263,14 +263,15 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
         except ValueError as e:
             raise HTTPException(400, str(e))
         topic, ontology = ep["topic"], ep["schema"]
-        schema = (ctx["schemas"] or {}).get(ontology) if ontology else None
-        checker = FormatChecker(ontology, schema["file"] if schema else None, schema["data"] if schema else None)
-        info = {"endpoint": ep["endpoint"], "dataset": ep["dataset"], "topic": topic, "schema": ontology,
+        names = [str(n) for n in ontology] if isinstance(ontology, list) else [str(ontology)] if ontology else []
+        checker = checker_for(names, ctx["schemas"] or {})
+        info = {"endpoint": ep["endpoint"], "dataset": ep["dataset"], "topic": topic,
+                "schema": " | ".join(names) or None,
                 "cluster": ep["cluster"]}
 
         stop = asyncio.Event()
         if s.fake_root:
-            feed = demo_feed(ontology, topic, checker, stop)
+            feed = demo_feed(names[0] if names else None, topic, checker, stop)
         else:
             try:
                 conn = bind(ep["connection"] or {}, s.settings.kafka_clusters)

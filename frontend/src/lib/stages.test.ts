@@ -55,11 +55,13 @@ describe("pairing", () => {
 
   it("pairs inputs with outputs and spots drops", () => {
     const inputs = [msg('{"guid":"a"}', 1), msg('{"guid":"b"}', 9), msg('{"guid":"c"}', 2), msg("no id", 3)];
-    const outputs = [msg('{"guid":"a","data":"x"}', 0.5), msg('{"guid":"z"}', 4)];
+    const outputs = [msg('{"guid":"a","data":"x"}', 0.5), msg('{"guid":"z"}', 4), msg('{"guid":"y"}', 12)];
     const pairs = pairRecords(inputs, outputs, NOW);
     const by = Object.fromEntries(pairs.map((p) => [p.id, p.status]));
     expect(by).toMatchObject({ a: "processed", b: "dropped", c: "pending", z: "out-only", "in:3": "unkeyed" });
     expect(pairs[0].id).toBe("a"); // newest first
+    // Inputs from before the output's oldest record in view aren't judged.
+    expect(pairRecords([msg('{"guid":"b"}', 9)], [msg('{"guid":"z"}', 4)], NOW)[1].status).toBe("pending");
   });
 });
 

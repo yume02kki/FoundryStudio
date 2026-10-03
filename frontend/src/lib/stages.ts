@@ -114,8 +114,10 @@ export interface Pair {
 }
 
 /**
- * Pair input and output records by id. An input with no output after `dropAfterMs`
- * counts as dropped by the processor; outputs whose input isn't in view are "out-only".
+ * Pair input and output records by id. An input with no output after `dropAfterMs`, while the
+ * output has moved on past it, counts as dropped by the processor (history from before the
+ * output's oldest record in view, or a stalled processor, isn't a drop); outputs whose input
+ * isn't in view are "out-only".
  */
 export function pairRecords(inputs: FeedMessage[], outputs: FeedMessage[], now: number, dropAfterMs = 5000): Pair[] {
   const outById = new Map<string, FeedMessage>();
@@ -123,6 +125,9 @@ export function pairRecords(inputs: FeedMessage[], outputs: FeedMessage[], now: 
     const id = recordId(o);
     if (id && !outById.has(id)) outById.set(id, o);
   }
+  const outTimes = outputs.map(messageTime);
+  const oldestOut = outTimes.length ? Math.min(...outTimes) : Infinity;
+  const newestOut = outTimes.length ? Math.max(...outTimes) : -Infinity;
   const pairs: Pair[] = [];
   const used = new Set<string>();
   inputs.forEach((i, n) => {
@@ -134,7 +139,8 @@ export function pairRecords(inputs: FeedMessage[], outputs: FeedMessage[], now: 
     }
     const output = outById.get(id);
     if (output) used.add(id);
-    const status: PairStatus = output ? "processed" : now - at > dropAfterMs ? "dropped" : "pending";
+    const judged = now - at > dropAfterMs && at >= oldestOut && newestOut > at;
+    const status: PairStatus = output ? "processed" : judged ? "dropped" : "pending";
     pairs.push({ id, input: i, output, status, at });
   });
   outputs.forEach((o, n) => {

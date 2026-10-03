@@ -54,6 +54,11 @@ def declarations(graph: dict, infos: Iterable[ProcessorInfo]) -> dict[str, tuple
     return out
 
 
+def _names(value) -> list[str]:
+    """A processor's In/Out: one dataset name or (flink) a list of them."""
+    return [str(v) for v in value] if isinstance(value, list) else [str(value)] if value else []
+
+
 class Validator:
     def __init__(self, foundry: Foundry):
         self.foundry = foundry
@@ -89,8 +94,8 @@ class Validator:
                               "node": None, "edge": None, "nodes": [], "field": "Configs"})
         datasets = manifest.get("DataSets") or {}
         processors = manifest.get("Processors") or {}
-        written = {s.get("Out") for s in processors.values() if isinstance(s, dict)}
-        read = {s.get("In") for s in processors.values() if isinstance(s, dict)}
+        written = {d for s in processors.values() if isinstance(s, dict) for d in _names(s.get("Out"))}
+        read = {d for s in processors.values() if isinstance(s, dict) for d in _names(s.get("In"))}
         result = {"ok": not issues, "errors": issues, "manifest": manifest_text,
                   "summary": f"{len(processors)} processors, {len(datasets)} datasets",
                   "sources": sorted(d for d in datasets if d in read and d not in written),
