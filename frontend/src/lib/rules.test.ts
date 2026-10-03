@@ -3,22 +3,22 @@ import type { GraphNode, ProcessorInfo } from "../types";
 import { checkConnection, emits, expects, inputsOf, outputsOf, shortReason, type GraphLike, type Processors } from "./rules";
 
 const info = (name: string, input: string, output: string, tagged?: [string, string]): ProcessorInfo => {
-  const branch = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "processor.yaml", warnings: [], web_url: "" };
+  const branch = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "processor.yaml", warnings: [], web_url: "", runtime: "dotnet" as const };
   const tag = tagged && { ...branch, ref: "v1.0.0", label: "v1.0.0", kind: "tag" as const, commit: "def", input: tagged[0], output: tagged[1] };
   return {
-    id: `foundry-platform/enrichers/${name}:`, project: `foundry-platform/enrichers/${name}`, path: "", name, description: "",
-    repo: `https://gitlab.com/foundry-platform/enrichers/${name}.git`, web_url: "", input, output, warnings: [],
-    latest: tag ? "v1.0.0" : "abc", head: "abc", versions: tag ? [tag, branch] : [branch],
+    id: `foundry-platform/operators/${name}:`, project: `foundry-platform/operators/${name}`, path: "", name, description: "",
+    repo: `https://gitlab.com/foundry-platform/operators/${name}.git`, web_url: "", input, output, warnings: [],
+    latest: tag ? "v1.0.0" : "abc", head: "abc", versions: tag ? [tag, branch] : [branch], runtime: "dotnet",
   };
 };
 const processors: Processors = Object.fromEntries(
   [info("XmlToJson", "XmlPackets", "Packets"), info("Decode", "Packets", "EnrichedPackets", ["XmlPackets", "Packets"])].map((i) => [i.id, i]),
 );
 const t = (id: string, Ref?: string): GraphNode => ({
-  id, kind: "processor", processor: { Repo: `https://gitlab.com/foundry-platform/enrichers/${id}.git`, ...(Ref ? { Ref } : {}) },
+  id, kind: "processor", processor: { Repo: `https://gitlab.com/foundry-platform/operators/${id}.git`, ...(Ref ? { Ref } : {}) },
 });
-const d = (name: string, DataSchema: string): GraphNode => ({
-  id: `dataset:${name}`, kind: "dataset", dataset: name, datasetSpec: { Type: "Kafka", Config: "kafka/prod", DataSchema, Topic: name.toLowerCase() },
+const d = (name: string, ...AllowedTypes: string[]): GraphNode => ({
+  id: `dataset:${name}`, kind: "dataset", dataset: name, datasetSpec: { Config: "kafka/prod", AllowedTypes, Topic: name.toLowerCase() },
 });
 
 const base = (): GraphLike => ({
@@ -26,8 +26,8 @@ const base = (): GraphLike => ({
   edges: [{ source: "dataset:Input", target: "XmlToJson" }],
 });
 
-describe("schemas", () => {
-  it("come from processor.yaml at the Ref for processors and DataSchema for datasets", () => {
+describe("types", () => {
+  it("come from processor.yaml at the Ref for processors and AllowedTypes for Kafkas", () => {
     const g = base();
     expect(emits(g.nodes[0], processors)).toBe("Packets");
     expect(expects(g.nodes[1], processors)).toBe("Packets");
@@ -44,38 +44,34 @@ describe("checkConnection", () => {
     expect(checkConnection(g, processors, "dataset:Converted", "Decode")).toEqual({ ok: true });
   });
 
-  it("refuses mismatched schemas in manifest.py's words", () => {
+  it("refuses mismatched types in the validators' words", () => {
     const g = base();
     const out = checkConnection(g, processors, "XmlToJson", "dataset:Output");
     expect(out).toMatchObject({ ok: false, kind: "type" });
-    expect(!out.ok && out.reason).toBe("Processors.XmlToJson.Out: XmlToJson writes Packets but Output carries EnrichedPackets");
+    expect(!out.ok && out.reason).toBe("Flow: XmlToJson -> Output: XmlToJson writes Packets but Output allows EnrichedPackets");
     const into = checkConnection(g, processors, "dataset:Input", "Decode");
-    expect(!into.ok && shortReason(into.reason)).toBe("Input carries XmlPackets but Decode reads Packets");
+    expect(!into.ok && shortReason(into.reason)).toBe("Input allows XmlPackets but Decode reads Packets");
   });
 
-  it("lets Any connect to every schema", () => {
+  it("takes writers of any type a Kafka allows, but only readers of all of them", () => {
     const g = base();
-    g.nodes.push(d("Untyped", "Any"));
-    expect(checkConnection(g, processors, "XmlToJson", "dataset:Untyped")).toEqual({ ok: true });
-    expect(checkConnection(g, processors, "dataset:Untyped", "Decode")).toEqual({ ok: true });
-  });
-
-  it("takes writers of any schema a union carries, but only readers of all of them", () => {
-    const g = base();
-    g.nodes.push({ ...d("Mixed", "Packets"), datasetSpec: { Type: "Kafka", DataSchema: ["Packets", "XmlPackets"], Topic: "mixed" } });
+    g.nodes.push(d("Mixed", "Packets", "XmlPackets"));
     expect(checkConnection(g, processors, "XmlToJson", "dataset:Mixed")).toEqual({ ok: true });
     const into = checkConnection(g, processors, "dataset:Mixed", "Decode");
-    expect(!into.ok && into.reason).toBe("Processors.Decode.In: Mixed carries Packets, XmlPackets but Decode reads Packets");
+    expect(!into.ok && into.reason).toBe("Flow: Mixed -> Decode: Mixed allows XmlPackets but Decode reads Packets");
   });
 
-  it("lets flink processors read several datasets", () => {
+  it("lets flink processors read several Kafkas", () => {
     const g = base();
-    g.nodes.push({ id: "Join", kind: "processor", processor: { Repo: "https://gitlab.com/x/join.git", Runtime: "flink" } });
+    const join = info("Join", "Packets | EnrichedPackets", "EnrichedPackets");
+    const withJoin: Processors = { ...processors, [join.id]: { ...join, versions: join.versions.map((v) => ({ ...v, runtime: "flink" as const })) } };
+    g.nodes.push(t("Join"));
     g.edges.push({ source: "dataset:Converted", target: "Join" });
-    expect(checkConnection(g, processors, "dataset:Output", "Join")).toEqual({ ok: true });
+    expect(checkConnection(g, withJoin, "dataset:Output", "Join")).toEqual({ ok: true });
+    expect(checkConnection(g, processors, "dataset:Output", "Join")).toMatchObject({ ok: false, kind: "single" });
   });
 
-  it("allows one In and one Out per processor", () => {
+  it("allows one input (dotnet) and one output per processor", () => {
     const g = base();
     g.nodes.push(d("Other", "XmlPackets"));
     expect(checkConnection(g, processors, "dataset:Other", "XmlToJson")).toMatchObject({ ok: false, kind: "single" });

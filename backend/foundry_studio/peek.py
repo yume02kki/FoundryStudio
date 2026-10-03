@@ -9,28 +9,24 @@ with two deliberate differences so peeking can never disturb the pipeline:
 * it never commits offsets.
 
 It starts a few messages before the end of each partition (recent history), then follows
-new messages. Each message is checked against the sink's Ontology schema file.
+new messages. Each message's type (its `foundry-type` header, stamped by the processor that
+wrote it) is checked against the Kafka's AllowedTypes; nothing checks the shape of the data.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
-import ipaddress
 import json
 import logging
 import math
 import random
-import re
 import threading
 import time
 import uuid
-import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from pathlib import Path
-
-import yaml
 
 HISTORY = 20  # recent messages to show when a feed opens
 PREVIEW_BYTES = 4096
@@ -101,150 +97,28 @@ def client_config(settings: dict, secrets_dir: Path) -> dict:
     return cfg
 
 
-_RFC3339 = re.compile(r"^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(\.\d+)?([Zz]|[+-]\d{2}:\d{2})$")
-_BASE64 = re.compile(r"^[A-Za-z0-9+/]*={0,2}$")
+TYPE_HEADER = "foundry-type"
 
 
-def _field_error(kind: str, value) -> str | None:
-    """foundry's field types (schemas/*.yaml): uuid, string, base64, datetime, ip."""
-    if kind == "string":
-        return None if isinstance(value, str) else "expected a string"
-    if not isinstance(value, str):
-        return f"expected {kind} text"
-    if kind == "uuid":
-        try:
-            uuid.UUID(value)
-            return None if len(value) == 36 else "not a UUID"
-        except ValueError:
-            return "not a UUID"
-    if kind == "base64":
-        return None if len(value) % 4 == 0 and _BASE64.match(value) else "not base64"
-    if kind == "datetime":
-        if not _RFC3339.match(value):
-            return "not an RFC 3339 date-time"
-        try:
-            datetime.fromisoformat(value.replace("Z", "+00:00").replace("z", "+00:00"))
-            return None
-        except ValueError:
-            return "not an RFC 3339 date-time"
-    if kind == "ip":
-        try:
-            ipaddress.ip_address(value)
-            return None
-        except ValueError:
-            return "not an IP address"
-    return None  # a type this Studio doesn't know: don't flag it
+class TypeChecker:
+    """Is a message one of its Kafka's AllowedTypes? Its writer names its type in the foundry-type header."""
 
+    def __init__(self, allowed: list[str]):
+        self.allowed = list(allowed)
+        self.label = " | ".join(self.allowed) or None
 
-class FormatChecker:
-    """Does a message match its topic's schema?
-
-    foundry's schemas (`format: json|xml` + `fields: {name: type}`) are checked field by
-    field, as the SDKs decode them: exactly those fields, each of its type. Older
-    pipelines' JSON Schema files are validated with jsonschema; XSDs get a well-formedness check.
-    """
-
-    def __init__(self, schema: str | None, filename: str | None, data: bytes | None):
-        self.schema = schema
-        self.kind = None
-        self.validator = None
-        self.fields: dict[str, str] = {}
-        if not filename or data is None:
-            return
-        if filename.endswith((".yaml", ".yml")):
-            try:
-                spec = yaml.safe_load(data) or {}
-            except yaml.YAMLError:
-                return
-            if isinstance(spec, dict) and spec.get("format") in ("json", "xml") and isinstance(spec.get("fields"), dict):
-                self.kind = f"fields-{spec['format']}"
-                self.fields = {str(k): str(v) for k, v in spec["fields"].items()}
-        elif filename.endswith(".json"):
-            import jsonschema
-
-            try:
-                spec = json.loads(data)
-                cls = jsonschema.validators.validator_for(spec)
-                self.validator = cls(spec, format_checker=cls.FORMAT_CHECKER)
-                self.kind = "json"
-            except (ValueError, jsonschema.SchemaError):
-                self.kind = None
-        elif filename.endswith(".xsd"):
-            self.kind = "xml"
-
-    def _check_fields(self, doc: dict) -> dict:
-        missing = sorted(set(self.fields) - set(doc))
-        extra = sorted(set(doc) - set(self.fields))
-        if missing:
-            return {"ok": False, "detail": f"doesn't match {self.schema}: missing field(s) {', '.join(missing)}"}
-        if extra:
-            return {"ok": False, "detail": f"doesn't match {self.schema}: unknown field(s) {', '.join(extra)}"}
-        for name, kind in self.fields.items():
-            if err := _field_error(kind, doc[name]):
-                return {"ok": False, "detail": f"doesn't match {self.schema}: {name}: {err}"}
-        return {"ok": True, "detail": f"matches {self.schema}"}
-
-    def check(self, value: bytes | None) -> dict:
+    def check(self, value: bytes | None, headers: list | None = None) -> dict:
         if value is None:
             return {"ok": False, "detail": "empty message (tombstone)"}
-        if self.kind == "fields-json":
-            try:
-                doc = json.loads(value)
-            except ValueError as e:
-                return {"ok": False, "detail": f"not JSON: {e}"}
-            if not isinstance(doc, dict):
-                return {"ok": False, "detail": f"doesn't match {self.schema}: expected a JSON object"}
-            return self._check_fields(doc)
-        if self.kind == "fields-xml":
-            try:
-                root = ET.fromstring(value)
-            except ET.ParseError as e:
-                return {"ok": False, "detail": f"not well-formed XML: {e}"}
-            return self._check_fields({child.tag: (child.text or "") for child in root})
-        if self.kind == "json":
-            try:
-                doc = json.loads(value)
-            except ValueError as e:
-                return {"ok": False, "detail": f"not JSON: {e}"}
-            errors = sorted(self.validator.iter_errors(doc), key=lambda e: list(e.path))
-            if errors:
-                where = "/".join(str(p) for p in errors[0].path) or "(root)"
-                return {"ok": False, "detail": f"doesn't match {self.schema}: {where}: {errors[0].message}"}
-            return {"ok": True, "detail": f"matches {self.schema}"}
-        if self.kind == "xml":
-            try:
-                ET.fromstring(value)
-            except ET.ParseError as e:
-                return {"ok": False, "detail": f"not well-formed XML: {e}"}
-            return {"ok": True, "detail": f"well-formed XML ({self.schema}; not validated against the XSD)"}
-        return {"ok": None, "detail": "no schema check"}
-
-
-class UnionChecker:
-    """A union DataSchema ([A, B]): a message must match one of them."""
-
-    def __init__(self, checkers: list[FormatChecker]):
-        self.checkers = checkers
-        self.schema = " | ".join(c.schema or "?" for c in checkers)
-
-    def check(self, value: bytes | None) -> dict:
-        results = [c.check(value) for c in self.checkers]
-        if hit := next((r for r in results if r["ok"]), None):
-            return hit
-        if all(r["ok"] is None for r in results):
-            return results[0]
-        return {"ok": False, "detail": f"matches none of {self.schema}: "
-                                      + "; ".join(r["detail"] for r in results if r["ok"] is False)}
-
-
-def checker_for(names: list[str], schemas: dict) -> FormatChecker | UnionChecker:
-    """The checker for a dataset's DataSchema (a name, a union of names, or none)."""
-    def one(name):
-        spec = schemas.get(name)
-        return FormatChecker(name, spec["file"] if spec else None, spec["data"] if spec else None)
-    if len(names) == 1:
-        return one(names[0])
-    return UnionChecker([one(n) for n in names]) if names else FormatChecker(None, None, None)
+        raw = next((v for k, v in reversed(headers or []) if k == TYPE_HEADER), None)
+        if raw is None:
+            return {"ok": None, "detail": f"no {TYPE_HEADER} header"}
+        kind = raw.decode(errors="replace") if isinstance(raw, bytes) else str(raw)
+        if not self.allowed:
+            return {"ok": None, "detail": f"{kind} (the Kafka allows no types)"}
+        if kind in self.allowed:
+            return {"ok": True, "detail": kind}
+        return {"ok": False, "detail": f"{kind}, but the Kafka allows {', '.join(self.allowed)}"}
 
 
 def _iso(ms: int | None) -> str | None:
@@ -264,16 +138,16 @@ def _preview(value: bytes | None) -> tuple[str | None, bool, str]:
 
 
 def message_event(partition: int, offset: int, ts_ms: int | None, key: bytes | None, value: bytes | None,
-                  checker) -> dict:
+                  checker: TypeChecker, headers: list | None = None) -> dict:
     text, truncated, encoding = _preview(value)
     return {
         "type": "message", "partition": partition, "offset": offset, "timestamp": _iso(ts_ms),
         "key": _preview(key)[0], "value": text, "encoding": encoding, "truncated": truncated,
-        "size": len(value) if value is not None else 0, "check": checker.check(value),
+        "size": len(value) if value is not None else 0, "check": checker.check(value, headers),
     }
 
 
-async def kafka_feed(cfg: dict, topic: str, checker: FormatChecker, stop: asyncio.Event,
+async def kafka_feed(cfg: dict, topic: str, checker: TypeChecker, stop: asyncio.Event,
                      history: int = HISTORY) -> AsyncIterator[dict]:
     """Read-only feed of a Kafka topic (blocking client in a thread, events through a queue)."""
     from confluent_kafka import Consumer, KafkaError, KafkaException, TopicPartition
@@ -345,7 +219,7 @@ async def kafka_feed(cfg: dict, topic: str, checker: FormatChecker, stop: asynci
                     last_error[0] = None
                     emit({"type": "status", "state": "live", "message": "receiving again"})
                 ts_type, ts = msg.timestamp()
-                emit(message_event(msg.partition(), msg.offset(), ts, msg.key(), msg.value(), checker))
+                emit(message_event(msg.partition(), msg.offset(), ts, msg.key(), msg.value(), checker, msg.headers()))
         except KafkaException as e:
             emit({"type": "status", "state": "error", "message": str(e.args[0].str() if e.args else e)})
         except Exception as e:  # never let a peek take the server down
@@ -375,8 +249,8 @@ async def kafka_feed(cfg: dict, topic: str, checker: FormatChecker, stop: asynci
 # Demo mode: there's no Kafka, so make up plausible traffic (flagged as demo).
 #
 # Every topic carries the same record stream: record n has the same guid (also the
-# Kafka key, as foundry-schemas' Schema::key does) on every topic, rendered in that
-# topic's schema and a little later the further downstream it is. Every 7th record's
+# Kafka key) on every topic, rendered as that topic's type and a little later the further
+# downstream it is. Every 7th record's
 # data isn't UTF-8 text, so a Packets topic doesn't carry it, the way Base64Decoder
 # drops it. That lets the UI pair a processor's input and output records.
 # --------------------------------------------------------------------------- #
@@ -401,7 +275,7 @@ def demo_record(n: int) -> dict:
 
 
 def demo_value(schema: str | None, rec: dict) -> bytes | None:
-    """Record n as it appears on a topic of this schema, or None if the topic doesn't carry it.
+    """Record n as it appears on a topic of this type, or None if the topic doesn't carry it.
 
     As in PacketPipeline: XML in, JSON with the payload still base64 (Packets), then the payload
     decoded and an ISP added (EnrichedPackets)."""
@@ -420,7 +294,7 @@ def demo_value(schema: str | None, rec: dict) -> bytes | None:
     return json.dumps(doc, separators=(",", ":")).encode()
 
 
-async def demo_feed(schema: str | None, topic: str, checker: FormatChecker, stop: asyncio.Event,
+async def demo_feed(schema: str | None, topic: str, checker: TypeChecker, stop: asyncio.Event,
                     history: int = 6, interval: float = DEMO_INTERVAL) -> AsyncIterator[dict]:
     yield {"type": "status", "state": "live", "partitions": 3, "demo": True,
            "message": "demo mode: generated sample messages, not a real topic"}
@@ -435,7 +309,8 @@ async def demo_feed(schema: str | None, topic: str, checker: FormatChecker, stop
         value = demo_value(schema, rec)
         if value is None:
             return None
-        return message_event(n % 3, n // 3, int(due(n) * 1000), rec["guid"].encode(), value, checker)
+        headers = [(TYPE_HEADER, schema.encode())] if schema else []
+        return message_event(n % 3, n // 3, int(due(n) * 1000), rec["guid"].encode(), value, checker, headers)
 
     now = time.time()
     n = int((now - DEMO_EPOCH) / (DEMO_INTERVAL * scale))

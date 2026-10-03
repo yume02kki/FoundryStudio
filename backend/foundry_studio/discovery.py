@@ -1,7 +1,8 @@
 """Processor discovery: find processor folders in GitLab projects and list their versions.
 
-A processor is any folder with a `processor.yaml` (name, in, out, description)
-(foundry's PROCESSORS.md). A version from before its folder had one carries a warning.
+A processor is any folder with a `processor.yaml` (name, description, Runtime, in, out: lists of
+type names, the classes in Foundry.Common.Models). A version from before its folder had one
+carries a warning.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import yaml
 from .gitlab import GitLab
 
 DECL_FILE = "processor.yaml"
+RUNTIMES = ("dotnet", "flink")
 _SEMVER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$")
 
 
@@ -37,6 +39,7 @@ class Decl:
     description: str
     source: str  # "processor.yaml" | "none"
     warnings: list[str] = field(default_factory=list)
+    runtime: str = "dotnet"
 
 
 @dataclass
@@ -51,6 +54,7 @@ class Version:
     source: str
     warnings: list[str]
     web_url: str
+    runtime: str = "dotnet"
 
 
 @dataclass
@@ -68,27 +72,30 @@ class ProcessorInfo:
     latest: str  # Ref of the newest version
     head: str  # commit SHA of the default branch
     versions: list[Version]
+    runtime: str = "dotnet"
 
     def to_json(self) -> dict:
         return asdict(self)
 
 
 class Discovery:
-    def __init__(self, gitlab: GitLab, known_schemas: set[str] | Callable[[], set[str]]):
+    def __init__(self, gitlab: GitLab, known_types: set[str] | Callable[[], set[str]]):
         self.gitlab = gitlab
-        self.known_schemas = known_schemas
+        self.known_types = known_types
         self._decl_cache: dict[tuple[str, str, str], Decl] = {}  # (project, commit, path) -> Decl
 
-    def _schema(self, value, where: str, warnings: list[str]) -> str | None:
-        """A declared schema; a list of them (a processor reading several) as "A | B", how the UI shows it."""
-        if value is None:
+    def _types(self, value, where: str, warnings: list[str]) -> str | None:
+        """Declared types (a list) as "A | B", how the UI shows them."""
+        if not value:
             warnings.append(f"{where}: not declared")
             return None
+        if not isinstance(value, list):
+            warnings.append(f"{where}: should be a list, e.g. [{value}]")
         names = [str(v) for v in value] if isinstance(value, list) else [str(value)]
-        known = self.known_schemas() if callable(self.known_schemas) else self.known_schemas
+        known = self.known_types() if callable(self.known_types) else self.known_types
         for name in names:
-            if known and name not in known and name != "Any":  # empty: the schemas couldn't be read, so don't flag everything
-                warnings.append(f"{where}: {name!r} is not a schema in configs")
+            if known and name not in known:  # empty: the types couldn't be read, so don't flag everything
+                warnings.append(f"{where}: {name!r} is not a class in Foundry.Common.Models")
         return " | ".join(names)
 
     async def declaration(self, project: str, path: str, commit: str) -> Decl:
@@ -107,13 +114,18 @@ class Discovery:
             except (yaml.YAMLError, ValueError) as e:
                 decl = Decl(None, None, None, "", DECL_FILE, [f"{DECL_FILE}: unreadable ({e})"])
             else:
+                runtime = str(spec.get("Runtime") or "")
+                if runtime not in RUNTIMES:
+                    warnings.append(f"{DECL_FILE} Runtime: {runtime!r} is not one of {', '.join(RUNTIMES)}"
+                                    if runtime else f"{DECL_FILE} Runtime: not declared")
                 decl = Decl(
                     str(spec["name"]) if spec.get("name") else None,
-                    self._schema(spec.get("in"), f"{DECL_FILE} in", warnings),
-                    self._schema(spec.get("out"), f"{DECL_FILE} out", warnings),
+                    self._types(spec.get("in"), f"{DECL_FILE} in", warnings),
+                    self._types(spec.get("out"), f"{DECL_FILE} out", warnings),
                     str(spec.get("description") or "").strip(),
                     DECL_FILE,
                     warnings,
+                    runtime if runtime in RUNTIMES else RUNTIMES[0],
                 )
         else:
             decl = Decl(None, None, None, "", "none", [f"no {DECL_FILE} in this version"])
@@ -150,6 +162,7 @@ class Discovery:
                 ref=t["name"], label=tag_re.match(t["name"]).group(1), kind="tag", commit=t["commit"]["id"],
                 committed_date=t["commit"].get("committed_date"), input=d.input, output=d.output,
                 source=d.source, warnings=d.warnings, web_url=f"{web}/-/tree/{t['name']}/{path}".rstrip("/"),
+                runtime=d.runtime,
             )
             for t, d in zip(tags, tag_decls)
         ]
@@ -158,6 +171,7 @@ class Discovery:
             ref=head["id"], label=f"{proj['default_branch']}@{head['id'][:8]}", kind="branch", commit=head["id"],
             committed_date=head.get("committed_date"), input=head_decl.input, output=head_decl.output,
             source=head_decl.source, warnings=head_decl.warnings, web_url=f"{web}/-/tree/{head['id']}/{path}".rstrip("/"),
+            runtime=head_decl.runtime,
         ))
         latest = versions[0]
         name = head_decl.name or (posixpath.basename(path) if path else None) or project
@@ -165,5 +179,5 @@ class Discovery:
             id=f"{project}:{path}", project=project, path=path, name=name, description=head_decl.description,
             repo=proj["http_url_to_repo"], web_url=f"{web}/-/tree/{proj['default_branch']}/{path}".rstrip("/"),
             input=latest.input, output=latest.output, warnings=head_decl.warnings,
-            latest=latest.ref, head=head["id"], versions=versions,
+            latest=latest.ref, head=head["id"], versions=versions, runtime=latest.runtime,
         )

@@ -13,15 +13,15 @@ test("Live data: the whole pipeline at a glance, then each step by clicking on t
     await expect(page.getByTestId(`overview-${stage}`)).toContainText("Running");
   }
   await expect(page.getByTestId("overview-dataset:Input")).toContainText("Flowing");
-  await expect(page.getByTestId("flow-XmlToJson->dataset:ConvertedPackets")).toHaveCount(1);
+  await expect(page.locator(`[data-testid^="flow-XmlToJson->dataset:ConvertedPackets|"]`).first()).toHaveCount(1);
   await expect(page.getByTestId("activity-XmlToJson")).toContainText(/\d+ in → \d+ out\/min/);
   await expect(page.getByTestId("activity-dataset:Output")).toContainText("Flowing");
 
   // Clicking a processor shows its input next to its output.
   await page.getByTestId("node-XmlToJson").click();
   const xml = page.getByTestId("processor-XmlToJson");
-  await expect(xml).toContainText("Input");
-  await expect(xml).toContainText("ConvertedPackets");
+  await expect(xml).toContainText("raw.xml");
+  await expect(xml).toContainText("enrichment.packets");
   await xml.locator(".pair-processed .pair-line").first().click();
   await expect(xml.locator(".diff")).toContainText("XML → JSON");
 
@@ -33,7 +33,7 @@ test("Live data: the whole pipeline at a glance, then each step by clicking on t
   await expect(page.getByTestId("activity-Decode")).toContainText("dropped");
 
   // Clicking a connection shows the dataset it carries, under its real topic; empty canvas goes back to the overview.
-  await page.getByTestId("rf__edge-dataset:ConvertedPackets->Decode").click({ force: true });
+  await page.locator(`[data-testid^="rf__edge-dataset:ConvertedPackets->Decode|"]`).first().click({ force: true });
   await expect(page.getByTestId("feed-ConvertedPackets")).toContainText("enrichment.packets");
   await expect(page.getByTestId("feed-status-ConvertedPackets")).toContainText("Flowing");
   await page.locator(".react-flow__pane").click({ position: { x: 30, y: 30 } });

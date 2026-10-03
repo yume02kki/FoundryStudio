@@ -55,14 +55,14 @@ class PipelineStore:
         return out
 
     def datasets(self) -> list[dict]:
-        """Every pipeline's DataSets entries, for reusing a topic another pipeline already defines."""
+        """Every pipeline's Kafkas entries, for reusing a topic another pipeline already defines."""
         out = []
         for p in self.list():
             try:
                 raw = yaml.safe_load((self.workspace / p["folder"] / MANIFEST).read_text()) or {}
             except yaml.YAMLError:
                 continue
-            datasets = raw.get("DataSets") if isinstance(raw, dict) else None
+            datasets = raw.get("Kafkas") if isinstance(raw, dict) else None
             for name, spec in (datasets if isinstance(datasets, dict) else {}).items():
                 if isinstance(spec, dict):
                     out.append({"folder": p["folder"], "pipeline": p["name"], "name": str(name), "spec": spec})

@@ -13,6 +13,7 @@ const v = (ref: string, label: string, kind: "tag" | "branch", commit: string): 
   source: "processor.yaml",
   warnings: [],
   web_url: "",
+  runtime: "dotnet",
 });
 
 const info = (versions: Version[]): ProcessorInfo => ({
@@ -26,6 +27,7 @@ const info = (versions: Version[]): ProcessorInfo => ({
   input: "EncodedPackets",
   output: "Packets",
   warnings: [],
+  runtime: "dotnet",
   latest: versions[0].ref,
   head: versions[versions.length - 1].commit,
   versions,

@@ -1,6 +1,7 @@
 import { applyEdgeChanges, applyNodeChanges, type Edge, type EdgeChange, type Node, type NodeChange } from "@xyflow/react";
 import { create } from "zustand";
 import { autoLayout } from "./lib/layout";
+import { headVersion } from "./lib/versions";
 import { messageTime } from "./lib/feedHealth";
 import {
   datasetName,
@@ -31,6 +32,8 @@ export type PEdge = Edge<{ schema?: string; connection?: string }, "topic">;
 export interface Meta {
   name: string;
   configs: Graph["configs"];
+  flow?: Graph["flow"];
+  comments?: Graph["comments"];
   extra: Record<string, unknown>;
 }
 
@@ -151,6 +154,8 @@ export const useStudio = create<State>()((set, get) => ({
     return {
       name: meta?.name ?? "",
       configs: meta?.configs ?? {},
+      flow: meta?.flow ?? [],
+      comments: meta?.comments ?? {},
       extra: meta?.extra ?? {},
       nodes: nodes.map((n) => n.data.spec),
       edges: edges.map((e) => ({ source: e.source, target: e.target })),
@@ -185,7 +190,7 @@ export const useStudio = create<State>()((set, get) => ({
     const pos = (id: string) => layout?.positions?.[id] ?? auto[id] ?? { x: 0, y: 0 };
     const nodes = graph.nodes.map((n) => toPNode(n, pos(n.id)));
     set((s) => ({
-      meta: { name: graph.name, configs: graph.configs ?? {}, extra: graph.extra ?? {} },
+      meta: { name: graph.name, configs: graph.configs ?? {}, flow: graph.flow ?? [], comments: graph.comments ?? {}, extra: graph.extra ?? {} },
       nodes,
       edges: graph.edges.map((e) => toPEdge(e.source, e.target)),
       socketOrder: layout?.sockets ?? {},
@@ -234,11 +239,12 @@ export const useStudio = create<State>()((set, get) => ({
     const taken = new Set(get().nodes.map((n) => n.id));
     let id = info.name.replace(/[^A-Za-z0-9._-]/g, "") || "Processor";
     for (let i = 2; taken.has(id); i++) id = `${info.name}${i}`;
-    // No Ref unless a version was asked for: the processor follows its default branch.
+    // Without a version asked for, Ref is the default branch: the processor follows it.
+    const branch = headVersion(info)?.label.split("@")[0];
     const spec: GraphNode = {
       id,
       kind: "processor",
-      processor: { Repo: info.repo, ...(info.path ? { Path: info.path } : {}), ...(ref ? { Ref: ref } : {}) },
+      processor: { Repo: info.repo, ...(info.path ? { Path: info.path } : {}), ...(ref || branch ? { Ref: ref || branch } : {}) },
     };
     set((s) => ({
       nodes: [...s.nodes.map((n) => ({ ...n, selected: false })), { ...toPNode(spec, position), selected: true }],

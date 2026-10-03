@@ -14,12 +14,12 @@ from foundry_studio.watcher import EventBus, Watcher
 
 from .conftest import DECODE, ISP, PROCESSOR_PROJECTS, XMLTOJSON
 
-SCHEMAS = {"XmlPackets", "Packets", "EnrichedPackets"}
+TYPES = {"XmlPackets", "Packets", "EnrichedPackets"}
 
 
 def make_watcher(fake, projects=None):
     bus = EventBus()
-    w = Watcher(fake, Discovery(fake, lambda: SCHEMAS), bus, projects, poll_interval=0.01,
+    w = Watcher(fake, Discovery(fake, lambda: TYPES), bus, projects, poll_interval=0.01,
                 discovery_interval=0)
     return w, bus, bus.subscribe()
 
@@ -66,12 +66,12 @@ async def test_new_tag_new_repo_and_removal(demo_root, fake):
     [ev] = drain(q)
     assert ev["type"] == "processor.added"
     t = ev["processor"]
-    assert (t["id"], t["input"], t["output"], t["warnings"]) == (f"{demo.ENRICHERS}/Deduplicate:", "Packets", "Packets", [])
+    assert (t["id"], t["input"], t["output"], t["warnings"]) == (f"{demo.OPERATORS}/Deduplicate:", "Packets", "Packets", [])
 
     demo.remove(demo_root, "Deduplicate")
     await w.poll_once()
     [ev] = drain(q)
-    assert ev == {"type": "processor.removed", "id": f"{demo.ENRICHERS}/Deduplicate:", "name": "Deduplicate"}
+    assert ev == {"type": "processor.removed", "id": f"{demo.OPERATORS}/Deduplicate:", "name": "Deduplicate"}
 
 
 @pytest.mark.anyio

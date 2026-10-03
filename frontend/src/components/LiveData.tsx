@@ -257,7 +257,7 @@ function TopicView({ feedKey, title, testId }: { feedKey: string; title: string;
         </div>
         <div className="feed-status">
           <StatusPill feed={feed} now={now} testId={`feed-status-${testId}`} />
-          {h && h.mismatches > 0 && <span className="tag tag-danger">{h.mismatches} don't match {feed?.schema}</span>}
+          {h && h.mismatches > 0 && <span className="tag tag-danger">{h.mismatches} not in {feed?.schema}</span>}
           <span className="feed-detail">{h?.detail}</span>
         </div>
       </header>

@@ -1,4 +1,4 @@
-"""Connection profiles and schemas, read through the GitLab API and cached."""
+"""Connection profiles and model types, read through the GitLab API and cached."""
 
 from __future__ import annotations
 
@@ -11,20 +11,19 @@ from foundry_studio.sources import SourceError, Sources
 
 
 def sources(fake, foundry, ttl=30.0) -> Sources:
-    return Sources(fake, "https://gitlab.com", foundry.manifest, "https://gitlab.com/foundry-platform/common/configs.git",
-                   ttl=ttl)
+    return Sources(fake, "https://gitlab.com", foundry.pipeline, "https://gitlab.com/foundry-platform/common/configRegistry.git",
+                   "https://gitlab.com/foundry-platform/common/foundry-common.git", ttl=ttl)
 
 
 @pytest.mark.anyio
-async def test_profiles_and_schemas(fake, foundry):
+async def test_profiles_and_types(fake, foundry):
     s = sources(fake, foundry)
     configs = await s.configs()
     assert configs["profiles"]["kafka/prod"] == {"Brokers": "kafka-internal:9092", "SecurityProtocol": "SASL_SSL",
                                                  "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-internal-creds"}
     assert set(configs["files"]) == {"kafka/prod.json", "kafka/load.json"} and len(configs["commit"]) == 40
-    schemas = await s.schemas()
-    assert set(schemas) == {"XmlPackets", "Packets", "EnrichedPackets"} == s.schema_names
-    assert schemas["EnrichedPackets"]["fields"]["ISP"] == "string" and schemas["XmlPackets"]["format"] == "xml"
+    types = await s.types()
+    assert types == sorted(demo.MODEL_TYPES) and set(types) == s.type_names
 
 
 @pytest.mark.anyio
@@ -53,6 +52,6 @@ def test_catalog_endpoint(services):
     with TestClient(create_app(services, start_watcher=False)) as c:
         cat = c.get("/api/catalog").json()
         assert list(cat["profiles"]) == ["kafka/load", "kafka/prod"] and cat["errors"] == {}
-        assert cat["configs"]["repo"] == "https://gitlab.com/foundry-platform/common/configs.git"
-        assert "data" not in cat["schemas"]["Packets"]
+        assert cat["configs"]["repo"] == "https://gitlab.com/foundry-platform/common/configRegistry.git"
+        assert cat["types"] == sorted(demo.MODEL_TYPES)
         assert "configs" in c.get("/api/catalog?ref=nope").json()["errors"]

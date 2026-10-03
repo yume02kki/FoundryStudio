@@ -1,9 +1,9 @@
 """What a manifest refers to but doesn't contain, read through the GitLab API:
 
-* connection profiles, `<kind>/<name>.json` in the configs repo the manifest names
-  (`Configs: {Repo, Ref}`), e.g. kafka/prod;
-* schemas, `schemas/*.yaml` in the configs repo, named as foundry-common's generator names the
-  types (xml_packets.yaml -> XmlPackets).
+* connection profiles, `kafka/<name>.json` in the configRegistry repo the manifest names
+  (`ConfigRegistry: {Repo, Ref}`), e.g. kafka/prod;
+* type names: the classes in foundry-common's Foundry.Common.Models (src/Foundry.Common.Models/*.cs),
+  which manifests' AllowedTypes and processor.yaml's in/out name.
 
 Both are cached for a few seconds, so validating on every edit doesn't hit GitLab each time,
 and a failed refresh keeps serving the last good copy. Studio never writes to either repo.
@@ -13,12 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import posixpath
 import time
 from pathlib import Path
 from types import ModuleType
-
-import yaml
 
 from .gitlab import GitLab, GitLabError
 
@@ -28,19 +25,20 @@ class SourceError(Exception):
 
 
 class Sources:
-    def __init__(self, gitlab: GitLab, gitlab_url: str, manifest: ModuleType, configs_repo: str,
-                 ttl: float = 30.0):
+    def __init__(self, gitlab: GitLab, gitlab_url: str, pipeline: ModuleType, configs_repo: str,
+                 models_repo: str, ttl: float = 30.0):
         self.gitlab = gitlab
         self.gitlab_url = gitlab_url.rstrip("/")
-        self.m = manifest
+        self.m = pipeline
         self.configs_repo = configs_repo
+        self.models_repo = models_repo
         self.ttl = ttl
         self._cache: dict[tuple, tuple[float, dict]] = {}
         self._locks: dict[tuple, asyncio.Lock] = {}
-        self.schema_names: set[str] = set()  # last known, for synchronous callers (discovery)
+        self.type_names: set[str] = set()  # last known, for synchronous callers (discovery)
 
     def project_of(self, repo: str) -> str:
-        """https://gitlab.com/foundry-platform/common/configs.git -> foundry-platform/common/configs (on this GitLab only)."""
+        """https://gitlab.com/foundry-platform/common/configRegistry.git -> foundry-platform/common/configRegistry (on this GitLab only)."""
         base = self.gitlab_url.split("://", 1)[-1]
         url = repo.strip().split("://", 1)[-1].removesuffix("/").removesuffix(".git")
         if not url.startswith(f"{base}/"):
@@ -80,7 +78,7 @@ class Sources:
         async def load():
             def wanted(path):
                 kind, _, name = path.partition("/")
-                return kind in self.m.KINDS and "/" not in name and name.endswith(".json")
+                return kind == "kafka" and "/" not in name and name.endswith(".json")
 
             commit, files = await self._files(self.project_of(repo), ref, wanted)
             profiles = {}
@@ -95,35 +93,26 @@ class Sources:
 
         return await self._cached(("configs", repo, ref), load)
 
-    async def schemas(self) -> dict:
-        """{name: {file, format, fields, data}} from the configs repo's default branch."""
+    async def types(self) -> list[str]:
+        """The class names in Foundry.Common.Models, from the models repo's default branch."""
         async def load():
-            name = self.project_of(self.configs_repo)
+            name = self.project_of(self.models_repo)
             project = await self.gitlab.get_project(name)
             _, files = await self._files(
                 name, project["default_branch"],
-                lambda p: posixpath.dirname(p) == self.m.SCHEMA_DIR and p.endswith(".yaml"))
-            out = {}
-            for path, data in sorted(files.items()):
-                try:
-                    spec = yaml.safe_load(data) or {}
-                except yaml.YAMLError:
-                    spec = {}
-                spec = spec if isinstance(spec, dict) else {}
-                fields = spec.get("fields") if isinstance(spec.get("fields"), dict) else {}
-                out[self.m.schema_name(posixpath.basename(path).removesuffix(".yaml"))] = {
-                    "file": path, "format": spec.get("format"),
-                    "fields": {str(k): str(v) for k, v in fields.items()}, "data": data,
-                }
-            return out
+                lambda p: p.startswith(f"{self.m.MODELS_DIR}/") and p.endswith(".cs"))
+            found = set()
+            for data in files.values():
+                found |= set(self.m.CLASS_RE.findall(data.decode(errors="replace")))
+            return {"types": sorted(found - {"IpAddressJsonConverter"})}
 
-        schemas = await self._cached(("schemas",), load)
-        self.schema_names = set(schemas)
-        return schemas
+        types = (await self._cached(("types",), load))["types"]
+        self.type_names = set(types)
+        return types
 
     @staticmethod
     def stage(configs: dict, dest: Path) -> Path:
-        """Write a configs() snapshot as a checkout manifest.py can read."""
+        """Write a configs() snapshot as a checkout scripts' lib/pipeline.py can read."""
         for path, data in configs["files"].items():
             (dest / path).parent.mkdir(parents=True, exist_ok=True)
             (dest / path).write_bytes(data)

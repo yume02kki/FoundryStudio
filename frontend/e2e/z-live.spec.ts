@@ -31,7 +31,7 @@ test("a new tag and a new processor show up live; the picked version is saved as
   await page.getByTestId("save").click();
   await expect(page.getByTestId("saved")).toBeVisible();
   const saved = await (await page.request.get("/api/pipelines/PacketPipeline")).json();
-  expect(saved.manifest).toContain("    Repo: https://gitlab.com/foundry-platform/enrichers/decodingprocessor.git\n    Ref: v1.1.0\n");
+  expect(saved.manifest).toContain("    Repo: https://gitlab.com/foundry-platform/operators/decodingprocessor.git\n    Ref: v1.1.0\n");
 
   expect(await page.evaluate(() => (window as unknown as { __noReload?: boolean }).__noReload)).toBe(true);
 });

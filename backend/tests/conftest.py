@@ -12,9 +12,9 @@ from foundry_studio.fake_gitlab import FakeGitLab
 from foundry_studio.foundry import Foundry
 
 SCRIPTS_DIR = REPO_ROOT / "vendor" / "scripts"
-XMLTOJSON = f"{demo.ENRICHERS}/xmltojsonprocessor"
-DECODE = f"{demo.ENRICHERS}/decodingprocessor"
-ISP = f"{demo.ENRICHERS}/IspEnricher"
+XMLTOJSON = f"{demo.OPERATORS}/xmltojsonprocessor"
+DECODE = f"{demo.OPERATORS}/decodingprocessor"
+ISP = f"{demo.OPERATORS}/IspEnricher"
 PROCESSOR_PROJECTS = [XMLTOJSON, DECODE, ISP]
 
 

@@ -1,13 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../api";
-import { ANY, inputsOf, outputsOf, processorschemas, schemaLabel } from "../lib/rules";
+import { inputsOf, outputsOf, processorschemas, runtimeOf, schemaLabel } from "../lib/rules";
 import { edgeDataset } from "../lib/stages";
 import { schemaColor } from "../lib/schemaColor";
-import { findInfo, versionFor } from "../lib/versions";
+import { findInfo, headVersion, versionFor } from "../lib/versions";
 import { issuesFor, NAME_RE, TOPIC_RE, useStudio } from "../store";
 import { datasetName, datasetNode, isDatasetNode, type ConnectionSettings, type DatasetSpec, type GraphNode, type Issue } from "../types";
 
-// ConnectionSettings keys (manifest.py's CONNECTION_KEYS). There is deliberately no password
+// ConnectionSettings keys (scripts' lib/pipeline.py CONNECTION_KEYS). There is deliberately no password
 // field: credentials are referenced by name through SecretRef.
 const PROTOCOLS = ["PLAINTEXT", "SSL", "SASL_PLAINTEXT", "SASL_SSL"];
 const MECHANISMS = ["PLAIN", "SCRAM-SHA-256", "SCRAM-SHA-512", "OAUTHBEARER", "GSSAPI"];
@@ -87,8 +87,28 @@ function Issues({ issues }: { issues: Issue[] }) {
 function SchemaChip({ schema }: { schema: string | undefined | null }) {
   return (
     <span className="schema-chip" style={{ color: schemaColor(schema), borderColor: schemaColor(schema) }}>
-      {schema || ANY}
+      {schema || "?"}
     </span>
+  );
+}
+
+/** AllowedTypes: several of the model classes. */
+function TypesSelect({ value, options, onChange }: { value: string[]; options: string[]; onChange: (v: string[]) => void }) {
+  const opts = [...value.filter((v) => !options.includes(v)), ...options];
+  return (
+    <select
+      multiple
+      size={Math.min(6, Math.max(2, opts.length))}
+      value={value}
+      onChange={(e) => onChange([...e.target.selectedOptions].map((o) => o.value))}
+      data-testid="dataset-types"
+    >
+      {opts.map((o) => (
+        <option key={o} value={o}>
+          {o}
+        </option>
+      ))}
+    </select>
   );
 }
 
@@ -128,18 +148,18 @@ export function ConnectionEditor({
   );
 }
 
-/** A connection profile's settings, from the configs repo (read-only). */
+/** A connection profile's settings, from configRegistry (read-only). */
 function ProfileSettings({ profile }: { profile: string | undefined }) {
   const catalog = useStudio((s) => s.catalog);
   if (!profile) return null;
   const settings = catalog?.profiles[profile];
-  if (!settings) return <div className="issue">Profile {profile} isn't in the configs repo.</div>;
+  if (!settings) return <div className="issue">Profile {profile} isn't in configRegistry.</div>;
   return (
     <>
       <h4>
         Profile <span className="mono">{profile}</span>
       </h4>
-      <p className="note">From {catalog?.configs?.repo ?? "the configs repo"} (read-only).</p>
+      <p className="note">From {catalog?.configs?.repo ?? "configRegistry"} (read-only).</p>
       <table className="kv" data-testid="profile-settings">
         <tbody>
           {Object.entries(settings).map(([k, v]) => (
@@ -189,6 +209,7 @@ function ProcessorInspector({ node }: { node: GraphNode }) {
   const spec = node.processor ?? {};
   const info = findInfo(spec, Object.values(processors));
   const version = versionFor(info, spec.Ref);
+  const branch = headVersion(info)?.label.split("@")[0] ?? "";
   const { input, output } = processorschemas(node, processors);
   const reads = inputsOf(graph(), node.id);
   const writes = outputsOf(graph(), node.id);
@@ -222,8 +243,8 @@ function ProcessorInspector({ node }: { node: GraphNode }) {
               });
             }}
           >
-            <option value="">Default branch (latest)</option>
-            {!version && spec.Ref && <option value={spec.Ref}>{spec.Ref} (not found)</option>}
+            <option value={branch}>Default branch: {branch} (latest)</option>
+            {!version && spec.Ref && spec.Ref !== branch && <option value={spec.Ref}>{spec.Ref} (not found)</option>}
             {info.versions
               .filter((v) => v.kind === "tag")
               .map((v) => (
@@ -243,18 +264,21 @@ function ProcessorInspector({ node }: { node: GraphNode }) {
           <input value={spec.Ref ?? ""} readOnly />
         )}
       </Field>
-      <Field label="Reads" hint="From processor.yaml at this version">
+      <Field label="Runtime" hint="From processor.yaml at this version">
+        <span className="mono" data-testid="processor-runtime">{runtimeOf(node, processors)}</span>
+      </Field>
+      <Field label="Reads" hint="in: from processor.yaml at this version">
         <SchemaChip schema={input} />
       </Field>
-      <Field label="Writes" hint="From processor.yaml at this version">
+      <Field label="Writes" hint="out: from processor.yaml at this version">
         <SchemaChip schema={output} />
       </Field>
-      <Field label="In">
+      <Field label="Reads from">
         <span className="mono" data-testid="processor-reads">
           {reads.join(", ") || "—"}
         </span>
       </Field>
-      <Field label="Out">
+      <Field label="Writes to">
         <span className="mono" data-testid="processor-writes">
           {writes.join(", ") || "—"}
         </span>
@@ -275,7 +299,7 @@ function ProcessorInspector({ node }: { node: GraphNode }) {
           </a>
         </p>
       )}
-      {!info && <p className="note">Not found among the discovered processors; its Ref and schemas can't be checked.</p>}
+      {!info && <p className="note">Not found among the discovered processors; its Ref and types can't be checked.</p>}
     </>
   );
 }
@@ -289,8 +313,7 @@ function DatasetInspector({ node }: { node: GraphNode }) {
   useStudio((s) => s.revision);
   const spec = node.datasetSpec;
   const profiles = Object.keys(catalog?.profiles ?? {});
-  const schemas = Object.keys(catalog?.schemas ?? {});
-  const info = typeof spec?.DataSchema === "string" && spec.DataSchema ? catalog?.schemas[spec.DataSchema] : undefined;
+  const types = catalog?.types ?? [];
   const g = graph();
   const processors = g.nodes.filter((n) => n.kind === "processor").map((n) => n.id);
   const writers = processors.filter((t) => outputsOf(g, t).includes(name));
@@ -298,24 +321,24 @@ function DatasetInspector({ node }: { node: GraphNode }) {
   const [overrides, setOverrides] = useState(!!spec?.ConnectionSettings && Object.keys(spec.ConnectionSettings).length > 0);
   const set = (patch: Partial<DatasetSpec>) =>
     updateSpec(node.id, (n) => {
-      const next: DatasetSpec = { Type: "Kafka", ...(n.datasetSpec ?? {}), ...patch };
-      for (const [k, v] of Object.entries(patch)) if (v === undefined || v === "") delete next[k];
+      const next: DatasetSpec = { ...(n.datasetSpec ?? {}), ...patch };
+      for (const [k, v] of Object.entries(patch)) if (v === undefined || v === "" || (Array.isArray(v) && !v.length)) delete next[k];
       return { ...n, datasetSpec: next };
     });
 
   return (
     <>
       <h3>
-        Dataset <span className="muted mono">· {name}</span>
+        Kafka <span className="muted mono">· {name}</span>
       </h3>
       <Issues issues={issuesFor(validation, node.id)} />
       <p className="note">A Kafka topic this pipeline reads or writes. It must already exist; nothing here creates or deletes one.</p>
       {!spec && (
         <div className="issue" data-testid="dataset-missing">
-          {name} is used but not defined under DataSets. Fill in its topic, profile and schema to define it.
+          {name} is used in Flow but not defined under Kafkas. Fill in its topic, profile and types to define it.
         </div>
       )}
-      <NameField id={node.id} label="Name" hint="Key under DataSets: in the manifest" />
+      <NameField id={node.id} label="Name" hint="Key under Kafkas: in the manifest" />
       <Field label="Topic">
         <input
           value={spec?.Topic ?? ""}
@@ -325,36 +348,12 @@ function DatasetInspector({ node }: { node: GraphNode }) {
           spellCheck={false}
         />
       </Field>
-      <Field label="Type">
-        <Select value={spec?.Type} options={["Kafka"]} onChange={(v) => set({ Type: v })} testId="dataset-type" allowEmpty={false} />
-      </Field>
-      <Field label="Profile" hint="Config: a connection profile from the configs repo">
+      <Field label="Profile" hint="Config: a connection profile from configRegistry">
         <Select value={spec?.Config} options={profiles} onChange={(v) => set({ Config: v })} testId="dataset-profile" />
       </Field>
-      <Field label="Schema" hint={`DataSchema: a schema in the configs repo's schemas/, or ${ANY} for none`}>
-        {Array.isArray(spec?.DataSchema) ? (
-          <span className="mono" data-testid="dataset-schema">{schemaLabel(spec.DataSchema)} <span className="muted">(several writers; edit in the manifest)</span></span>
-        ) : (
-          <Select value={spec?.DataSchema} options={[ANY, ...schemas]} onChange={(v) => set({ DataSchema: v })} testId="dataset-schema" />
-        )}
+      <Field label="Allowed types" hint="AllowedTypes: classes in Foundry.Common.Models (ctrl-click for several)">
+        <TypesSelect value={spec?.AllowedTypes ?? []} options={types} onChange={(v) => set({ AllowedTypes: v })} />
       </Field>
-      {info && (
-        <div className="schema-fields" data-testid="dataset-fields">
-          <div className="muted">
-            {spec?.DataSchema}: {info.format ?? "?"} · {info.file}
-          </div>
-          <table>
-            <tbody>
-              {Object.entries(info.fields).map(([f, t]) => (
-                <tr key={f}>
-                  <td className="mono">{f}</td>
-                  <td className="muted">{t}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
       <Field label="Written by">
         <span className="mono">{writers.join(", ") || "outside this pipeline"}</span>
       </Field>
@@ -363,7 +362,7 @@ function DatasetInspector({ node }: { node: GraphNode }) {
       </Field>
       <ProfileSettings profile={spec?.Config} />
       <label className="field">
-        <span className="field-label" title="ConnectionSettings on the dataset override the profile's, key by key">
+        <span className="field-label" title="ConnectionSettings on the Kafka override the profile's, key by key">
           Override
         </span>
         <span className="field-input">
@@ -389,7 +388,7 @@ function DatasetInspector({ node }: { node: GraphNode }) {
   );
 }
 
-/** A connection is a processor reading or writing a dataset. */
+/** A connection (a Flow entry) is a processor reading or writing a Kafka. */
 function EdgeInspector({ id }: { id: string }) {
   const validation = useStudio((s) => s.validation);
   const edge = useStudio((s) => s.edges.find((e) => e.id === id));
@@ -414,8 +413,8 @@ function EdgeInspector({ id }: { id: string }) {
       <Field label="Topic">
         <input value={spec?.Topic ?? ""} readOnly className="mono" data-testid="edge-topic" />
       </Field>
-      <Field label="Carries">
-        <SchemaChip schema={schemaLabel(spec?.DataSchema)} />
+      <Field label="Allows">
+        <SchemaChip schema={schemaLabel(spec?.AllowedTypes)} />
       </Field>
       {reading && (
         <Field label="Consumer group" hint="<pipeline Name>.<processor>">
@@ -448,10 +447,10 @@ function PipelineInspector() {
     <>
       <h3>Pipeline</h3>
       <Issues issues={pipelineIssues} />
-      <Field label="Configs repo" hint="Configs.Repo: where the connection profiles come from">
+      <Field label="ConfigRegistry repo" hint="ConfigRegistry.Repo: where the connection profiles come from">
         <TextInput value={meta.configs.Repo} placeholder={health?.configsRepo} onChange={(v) => setConfigs("Repo", v)} testId="configs-repo" />
       </Field>
-      <Field label="Configs ref" hint="Configs.Ref: a branch, tag or commit; defaults to main">
+      <Field label="ConfigRegistry ref" hint="ConfigRegistry.Ref (required): a branch, tag or commit">
         <TextInput value={meta.configs.Ref} placeholder="main" onChange={(v) => setConfigs("Ref", v)} testId="configs-ref" />
       </Field>
       <p className="note">
@@ -465,7 +464,7 @@ function PipelineInspector() {
         </button>
       </p>
       <p className="note">
-        Schemas from {health?.schemasRepo ?? "configs"}: {Object.keys(catalog?.schemas ?? {}).join(", ") || "none"}.
+        Types from {health?.modelsRepo ?? "foundry-common"}: {(catalog?.types ?? []).join(", ") || "none"}.
       </p>
       <p className="note">Select a node or an edge to inspect it.</p>
     </>

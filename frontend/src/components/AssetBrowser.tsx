@@ -5,7 +5,7 @@ import type { ProcessorInfo } from "../types";
 import { DRAG_MIME } from "./Canvas";
 import { Datasets } from "./Datasets";
 import { LiveData, LiveTabBadges } from "./LiveData";
-import { ANY, schemaList } from "../lib/rules";
+import { schemaList } from "../lib/rules";
 
 const FAV_KEY = "foundry-studio.favorites";
 const FAVORITES = "★favorites";
@@ -78,14 +78,14 @@ function treeEntries(projects: string[], processors: ProcessorInfo[]): TreeEntry
 function SchemaChip({ schema }: { schema: string | null }) {
   return (
     <span className="schema-chip" style={{ borderColor: schemaColor(schema), color: schemaColor(schema) }}>
-      {schema || ANY}
+      {schema || "?"}
     </span>
   );
 }
 
 function Card({ t, favorite, onFavorite }: { t: ProcessorInfo; favorite: boolean; onFavorite: () => void }) {
   const changed = useStudio((s) => s.changed[t.id]);
-  // Cards add the processor without a Ref (its default branch); pin a version on the node.
+  // Cards add the processor on its default branch; pin a version on the node.
   const version = t.versions.find((v) => v.kind === "branch") ?? t.versions[0];
   const fresh = changed && Date.now() - changed.at < 15000;
 
@@ -100,7 +100,7 @@ function Card({ t, favorite, onFavorite }: { t: ProcessorInfo; favorite: boolean
       draggable
       onDragStart={onDragStart}
       data-testid={`card-${t.name}`}
-      title={[t.description, `${t.project}/${t.path}`, ...t.warnings].filter(Boolean).join("\n")}
+      title={[t.description, `${t.project}/${t.path}`, `Runtime: ${version.runtime}`, ...t.warnings].filter(Boolean).join("\n")}
     >
       <div className="card-head">
         <span className="card-icon">⚙</span>
@@ -110,13 +110,16 @@ function Card({ t, favorite, onFavorite }: { t: ProcessorInfo; favorite: boolean
         </button>
       </div>
       <div className="card-types">
-        {/* One line per input schema (a processor reading several), then what it writes. */}
+        {/* One line per input type (a processor reading several), then what it writes. */}
         <span className="card-inputs">
           {(schemaList(version.input) ?? [version.input]).map((s, i) => (
             <SchemaChip key={i} schema={s} />
           ))}
         </span>
-        <span className="arrow">→</span> <SchemaChip schema={version.output} />
+        <span className="arrow">→</span>{" "}
+        {(schemaList(version.output) ?? [version.output]).map((s, i) => (
+          <SchemaChip key={i} schema={s} />
+        ))}
       </div>
       <div className="card-foot">
         {t.warnings.length > 0 && (
@@ -189,7 +192,7 @@ export function AssetBrowser() {
           onClick={() => useStudio.setState({ bottomTab: "datasets" })}
           data-testid="tab-datasets"
         >
-          Datasets
+          Kafkas
         </button>
         <button
           role="tab"
@@ -209,7 +212,7 @@ export function AssetBrowser() {
             data-testid="asset-search"
           />
         ) : tab === "datasets" ? (
-          <span className="tab-note">This pipeline's datasets · drag in another pipeline's to reuse its topic</span>
+          <span className="tab-note">This pipeline's Kafkas · drag in another pipeline's to reuse its topic</span>
         ) : (
           <>
             <span className="tab-note">Read-only: never joins the pipeline's consumer group, never commits offsets</span>

@@ -5,10 +5,11 @@
     python -m foundry_studio.demo add Deduplicate Packets Packets "Drops repeated guids"
     python -m foundry_studio.demo remove Deduplicate
 
-The repos mirror the real ones: foundry-platform/common/configs (connection profiles and schemas)
-and one foundry-platform/enrichers project per processor,
-each with a processor.yaml at its root. The workspace holds PacketPipeline. Nothing here
-needs a token, Docker or Kafka; Live data shows generated records.
+The repos mirror the real ones: foundry-platform/common/configRegistry (connection profiles),
+foundry-platform/common/foundry-common (the model classes, i.e. the type names) and one
+foundry-platform/operators project per processor, each with a processor.yaml at its root. The
+workspace holds PacketPipeline. Nothing here needs a token, Docker or Kafka; Live data shows
+generated records.
 """
 
 from __future__ import annotations
@@ -23,8 +24,9 @@ from pathlib import Path
 from .config import REPO_ROOT
 
 DEFAULT_ROOT = REPO_ROOT / ".demo-gitlab"
-CONFIGS = "foundry-platform/common/configs"
-ENRICHERS = "foundry-platform/enrichers"
+CONFIGS = "foundry-platform/common/configRegistry"
+MODELS = "foundry-platform/common/foundry-common"
+OPERATORS = "foundry-platform/operators"
 
 # Fixed dates keep commit SHAs identical across `init` runs.
 FIXED_DATE = "2026-09-01T12:00:00+00:00"
@@ -35,12 +37,9 @@ PROFILES = {
     "kafka/load.json": ('{\n  "ConnectionSettings": {"Brokers": "kafka-load:9092", "SecurityProtocol": "SASL_SSL",\n'
                         '    "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-load-creds"}\n}\n'),
 }
-_PACKET = "  guid: uuid\n  data: {data}\n{extra}  time_sent: datetime\n  host_ip: ip\n  target_ip: ip\n"
-SCHEMAS = {
-    "schemas/xml_packets.yaml": "format: xml\nfields:\n" + _PACKET.format(data="base64", extra=""),
-    "schemas/packets.yaml": "format: json\nfields:\n" + _PACKET.format(data="string", extra=""),
-    "schemas/enriched_packets.yaml": "format: json\nfields:\n" + _PACKET.format(data="string", extra="  ISP: string\n"),
-}
+MODEL_TYPES = ("XmlPackets", "Packets", "DecodeEnrichment", "IspEnrichment", "EnrichedPackets")
+MODEL_FILES = {f"src/Foundry.Common.Models/{t}.cs": f"namespace Foundry.Common.Models;\n\npublic sealed class {t}\n{{\n    public Guid Guid {{ get; set; }}\n}}\n"
+               for t in MODEL_TYPES}
 PROCESSORS = {  # project -> (name, in, out, description)
     "xmltojsonprocessor": ("XmlToJson", "XmlPackets", "Packets", "Converts XML packets to JSON; data stays base64."),
     "decodingprocessor": ("Decode", "Packets", "EnrichedPackets", "Decodes the base64 payload to text."),
@@ -50,45 +49,48 @@ MANIFEST = f"""\
 # yaml-language-server: $schema=https://gitlab.com/foundry-platform/common/scripts/-/jobs/artifacts/main/raw/manifest.schema.json?job=schema
 Name: EnrichmentPipeline
 
-Configs:
+ConfigRegistry:
   Repo: https://gitlab.com/{CONFIGS}.git
-  # Ref: v1   # optional, defaults to main
+  Ref: main
 
-# DataSchema names a schema in the Configs repo's schemas/ (types in the Foundry.Common.Models package).
-DataSets:
+Kafkas:
   Input:
-    Type: Kafka
     Config: kafka/prod
-    DataSchema: XmlPackets
+    AllowedTypes: [XmlPackets]
     Topic: raw.xml
 
   ConvertedPackets:
-    Type: Kafka
     Config: kafka/prod
-    DataSchema: Packets
+    AllowedTypes: [Packets]
     Topic: enrichment.packets
 
   Output:
-    Type: Kafka
     Config: kafka/prod
-    DataSchema: EnrichedPackets
+    AllowedTypes: [EnrichedPackets]
     Topic: packets.enriched
 
 Processors:
   XmlToJson:
-    Repo: https://gitlab.com/{ENRICHERS}/xmltojsonprocessor.git
-    In: Input
-    Out: ConvertedPackets
+    Repo: https://gitlab.com/{OPERATORS}/xmltojsonprocessor.git
+    Ref: main
 
   Decode:
-    Repo: https://gitlab.com/{ENRICHERS}/decodingprocessor.git
-    In: ConvertedPackets
-    Out: Output
+    Repo: https://gitlab.com/{OPERATORS}/decodingprocessor.git
+    Ref: main
 
   Isp:
-    Repo: https://gitlab.com/{ENRICHERS}/IspEnricher.git
-    In: ConvertedPackets
-    Out: Output
+    Repo: https://gitlab.com/{OPERATORS}/IspEnricher.git
+    Ref: main
+
+Flow:
+    - Input -> XmlToJson
+    - XmlToJson -> ConvertedPackets
+
+    - ConvertedPackets -> Decode
+    - Decode -> Output
+
+    - ConvertedPackets -> Isp
+    - Isp -> Output
 """
 
 
@@ -112,11 +114,12 @@ def processor_files(name: str, input: str, output: str, version: str = "1.0.0",
                       description: str | None = None) -> dict[str, str]:
     """A processor repo in the shape of the real ones (minimal: no Kafka loop)."""
     return {
-        "processor.yaml": f"name: {name}\nin: {input}\nout: {output}\ndescription: {description or name}\n",
+        "processor.yaml": (f"name: {name}\ndescription: {description or name}\nRuntime: dotnet\n\n"
+                           f"in: [{input}]\nout: [{output}]\n"),
         f"{name}.csproj": (
             '<Project Sdk="Microsoft.NET.Sdk.Worker">\n  <PropertyGroup>\n    <TargetFramework>net8.0</TargetFramework>\n'
             f"    <Version>{version}</Version>\n  </PropertyGroup>\n  <ItemGroup>\n"
-            '    <PackageReference Include="Foundry.Common.Configuration" Version="1.*" />\n  </ItemGroup>\n</Project>\n'),
+            '    <PackageReference Include="Foundry.Common.Configuration" Version="2.*" />\n  </ItemGroup>\n</Project>\n'),
         "Program.cs": (f"using Foundry.Common.Models;\n\n// Demo stand-in: {input} -> {output}.\n"
                        f"static {output} Processor({input} p) => new() {{ Guid = p.Guid }};\n"),
     }
@@ -139,9 +142,10 @@ def _repo(root: Path, project: str, files: dict[str, str], message: str, tag: st
 def init(root: Path = DEFAULT_ROOT) -> Path:
     if root.exists():
         shutil.rmtree(root)
-    _repo(root, CONFIGS, {**PROFILES, **SCHEMAS}, "Kafka connection profiles and packet schemas")
+    _repo(root, CONFIGS, PROFILES, "Kafka connection profiles")
+    _repo(root, MODELS, MODEL_FILES, "Packet models")
     for project, (name, i, o, desc) in PROCESSORS.items():
-        _repo(root, f"{ENRICHERS}/{project}", processor_files(name, i, o, description=desc), f"{name} 1.0.0", "v1.0.0")
+        _repo(root, f"{OPERATORS}/{project}", processor_files(name, i, o, description=desc), f"{name} 1.0.0", "v1.0.0")
     # A plain folder (not a git repo), so the fake GitLab doesn't list it as a project.
     (workspace(root) / "PacketPipeline").mkdir(parents=True)
     (workspace(root) / "PacketPipeline" / "PipelineManifest.yaml").write_text(MANIFEST)
@@ -149,7 +153,7 @@ def init(root: Path = DEFAULT_ROOT) -> Path:
 
 
 def tag(root: Path, project: str, version: str) -> str:
-    repo = root / ENRICHERS / project
+    repo = root / OPERATORS / project
     csproj = next(repo.glob("*.csproj"))
     csproj.write_text(re.sub(r"<Version>[^<]*</Version>", f"<Version>{version.lstrip('v')}</Version>",
                              csproj.read_text()))
@@ -160,11 +164,11 @@ def tag(root: Path, project: str, version: str) -> str:
 
 
 def add(root: Path, name: str, input: str, output: str, description: str | None = None) -> None:
-    _repo(root, f"{ENRICHERS}/{name}", processor_files(name, input, output, "0.1.0", description), f"Add {name}")
+    _repo(root, f"{OPERATORS}/{name}", processor_files(name, input, output, "0.1.0", description), f"Add {name}")
 
 
 def remove(root: Path, name: str) -> None:
-    repo = root / ENRICHERS / name
+    repo = root / OPERATORS / name
     _git(repo, "rm", "-q", "processor.yaml")
     _git(repo, "commit", "-q", "-m", f"{name} is no longer a processor")
 

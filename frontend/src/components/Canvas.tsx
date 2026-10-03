@@ -27,7 +27,7 @@ export const DATASET_MIME = "application/x-foundry-dataset";
 const nodeTypes = { processor: ProcessorNode, dataset: DatasetNode };
 const edgeTypes = { topic: TopicEdge };
 
-/** Ask manifest.py (through the backend) whether source -> target is acceptable; refuse with its message. */
+/** Ask the validators (through the backend) whether source -> target is acceptable; refuse with its message. */
 async function confirmEdge(source: string, target: string, localReason?: string): Promise<boolean> {
   const { graph, toast } = useStudio.getState();
   let message = localReason ?? null;
@@ -108,7 +108,7 @@ export function Canvas() {
   }, []);
 
   const onConnectEnd = useCallback((_: MouseEvent | TouchEvent, state: FinalConnectionState) => {
-    // A drop on a port that refused the wire: say why, in manifest.py's words.
+    // A drop on a port that refused the wire: say why, in the validators' words.
     if (state.isValid !== false || !state.toNode || !state.fromNode || !state.fromHandle) return;
     if (state.toNode.id === state.fromNode.id && !state.toHandle) return;
     const [source, target] =

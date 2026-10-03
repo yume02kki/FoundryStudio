@@ -20,13 +20,9 @@ from foundry_studio.app import create_app
 from foundry_studio import demo
 from foundry_studio.manifest import manifest_to_graph
 from foundry_studio.peek import (
-    FormatChecker, PeekError, bind, client_config, demo_feed, demo_record, demo_value, kafka_feed,
+    PeekError, TypeChecker, bind, client_config, demo_feed, demo_record, demo_value, kafka_feed,
 )
 
-
-def schema(file: str) -> bytes:
-    """A schema file as configs has it (the demo's copy)."""
-    return demo.SCHEMAS[f"schemas/{file}"].encode()
 
 PACKET = {"guid": "3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17", "data": "Hello, world!", "time_sent": "2026-10-01T14:32:05.123Z",
           "host_ip": "10.0.4.17", "target_ip": "2001:db8::42"}
@@ -84,45 +80,23 @@ def test_bind_uses_this_environments_cluster(tmp_path):
     assert bind({"Brokers": "elsewhere:9092"}, clusters) == {"Brokers": "elsewhere:9092"}
 
 
-def test_format_checks():
-    """foundry's YAML schemas (format + fields), checked field by field like the SDKs decode them."""
-    packets = FormatChecker("Packets", "schemas/packets.yaml", schema("packets.yaml"))
-    assert packets.check(json.dumps(PACKET).encode()) == {"ok": True, "detail": "matches Packets"}
-    assert "unknown field(s) extra" in packets.check(json.dumps({**PACKET, "extra": 1}).encode())["detail"]
-    assert "missing field(s) guid" in packets.check(json.dumps({k: v for k, v in PACKET.items() if k != "guid"}).encode())["detail"]
-    assert "host_ip: not an IP address" in packets.check(json.dumps({**PACKET, "host_ip": "10.0.4.300"}).encode())["detail"]
-    assert "time_sent: not an RFC 3339" in packets.check(json.dumps({**PACKET, "time_sent": "yesterday"}).encode())["detail"]
-    assert not packets.check(b"<packet/>")["ok"]
-
-    enriched = FormatChecker("EnrichedPackets", "schemas/enriched_packets.yaml", schema("enriched_packets.yaml"))
-    assert "missing field(s) ISP" in enriched.check(json.dumps(PACKET).encode())["detail"]
-    assert enriched.check(json.dumps({**PACKET, "ISP": "x"}).encode())["ok"]
-
-    xml = FormatChecker("XmlPackets", "schemas/xml_packets.yaml", schema("xml_packets.yaml"))
-    assert "data: not base64" in xml.check(XML.replace(b"SGVsbG8=", b"Hello!"))["detail"]
-    assert xml.check(XML) == {"ok": True, "detail": "matches XmlPackets"}
-    assert not xml.check(b"<packet>")["ok"]
-    assert "guid: not a UUID" in xml.check(XML.replace(b"3f2b8c1e-9a4d-4e7b-8f21-6c0d5a9e4b17", b"nope"))["detail"]
-    assert FormatChecker(None, None, None).check(b"x")["ok"] is None
-
-
-def test_legacy_schema_files_still_work():
-    """Pipelines deployed before foundry's YAML schemas carry JSON Schema / XSD files."""
-    spec = json.dumps({"type": "object", "required": ["guid"], "additionalProperties": False,
-                       "properties": {"guid": {"type": "string"}}}).encode()
-    legacy = FormatChecker("Packets", "schemas/packets.schema.json", spec)
-    assert legacy.check(b'{"guid": "x"}')["ok"] and not legacy.check(b'{"guid": "x", "y": 1}')["ok"]
-    assert FormatChecker("XmlPackets", "schemas/xml_packets.xsd", b"<xs:schema/>").check(XML)["ok"]
+def test_type_checks():
+    """A message is one of the Kafka's AllowedTypes when its foundry-type header says so."""
+    checker = TypeChecker(["DecodeEnrichment", "IspEnrichment"])
+    assert checker.label == "DecodeEnrichment | IspEnrichment"
+    assert checker.check(b"{}", [("foundry-type", b"IspEnrichment")]) == {"ok": True, "detail": "IspEnrichment"}
+    assert checker.check(b"{}", [("foundry-type", b"Packets")]) == {
+        "ok": False, "detail": "Packets, but the Kafka allows DecodeEnrichment, IspEnrichment"}
+    assert checker.check(b"{}", None)["ok"] is None
+    assert checker.check(None)["ok"] is False
 
 
 @pytest.mark.anyio
-async def test_demo_feed_matches_its_schemas():
-    for name, file in (("XmlPackets", "xml_packets.yaml"), ("Packets", "packets.yaml"),
-                       ("EnrichedPackets", "enriched_packets.yaml")):
-        checker = FormatChecker(name, file, schema(file))
+async def test_demo_feed_stamps_its_types():
+    for name in ("XmlPackets", "Packets", "EnrichedPackets"):
         stop = asyncio.Event()
         events = []
-        async for e in demo_feed(name, "t", checker, stop, interval=0.01):
+        async for e in demo_feed(name, "t", TypeChecker([name]), stop, interval=0.01):
             events.append(e)
             if len(events) == 8:
                 stop.set()
@@ -176,7 +150,7 @@ def test_peek_endpoint_streams_demo_data_and_stops_on_disconnect(services):
         assert events[0] == {"type": "endpoint", "endpoint": "dataset:ConvertedPackets", "dataset": "ConvertedPackets",
                              "topic": "enrichment.packets", "schema": "Packets", "cluster": "kafka/prod"}
         assert events[1]["state"] == "live"
-        assert all(e["check"] == {"ok": True, "detail": "matches Packets"} for e in events[2:])
+        assert all(e["check"] == {"ok": True, "detail": "Packets"} for e in events[2:])
         # Closing the stream releases the feed (the semaphore slot comes back).
         deadline = time.time() + 10
         while services.peeks._value != 8 and time.time() < deadline:
@@ -247,7 +221,7 @@ async def test_kafka_feed_history_then_live_without_touching_groups(tmp_path):
     if KAFKA_SASL:
         settings |= {"SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-creds"}
     cfg = client_config(settings, secrets(tmp_path))
-    checker = FormatChecker("XmlPackets", "xml_packets.xsd", b"")
+    checker = TypeChecker(["XmlPackets"])
     stop = asyncio.Event()
     feed = kafka_feed(cfg, topic, checker, stop, history=9)
 
@@ -256,7 +230,7 @@ async def test_kafka_feed_history_then_live_without_touching_groups(tmp_path):
     assert [s["state"] for s in status] == ["connecting", "live"] and status[1]["partitions"] == 3
     history = [e for e in events if e["type"] == "message"]
     assert len(history) == 9  # 3 most recent per partition
-    assert sum(not m["check"]["ok"] for m in history) == 1  # the broken one is flagged
+    assert all(m["check"]["ok"] is None for m in history)  # no foundry-type header
 
     produce(topic, [b"<packet>new</packet>"])
     events = await collect(feed, lambda ev: any(e["type"] == "message" for e in ev))
@@ -280,7 +254,7 @@ async def test_kafka_feed_reports_bad_credentials_and_unreachable_brokers(tmp_pa
         cfg = client_config({"Brokers": KAFKA_SASL, "SecurityProtocol": "SASL_PLAINTEXT",
                              "SaslMechanism": "SCRAM-SHA-512", "SecretRef": "kafka-creds"},
                             secrets(tmp_path, password="wrong"))
-        feed = kafka_feed(cfg, make_topic(), FormatChecker(None, None, None), stop)
+        feed = kafka_feed(cfg, make_topic(), TypeChecker([]), stop)
         events = await collect(feed, lambda ev: any(e.get("state") == "error" for e in ev))
         assert "authentication" in next(e for e in events if e.get("state") == "error")["message"].lower()
         stop.set()
@@ -288,7 +262,7 @@ async def test_kafka_feed_reports_bad_credentials_and_unreachable_brokers(tmp_pa
 
     stop = asyncio.Event()
     cfg = client_config({"Brokers": "127.0.0.1:1"}, tmp_path)
-    feed = kafka_feed(cfg, "anything", FormatChecker(None, None, None), stop)
+    feed = kafka_feed(cfg, "anything", TypeChecker([]), stop)
     events = await collect(feed, lambda ev: any(e.get("state") == "error" for e in ev))
     assert any(e.get("state") == "error" for e in events)
     stop.set()

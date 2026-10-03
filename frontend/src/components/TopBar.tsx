@@ -29,7 +29,7 @@ function ValidationChip() {
   if (validation.ok) {
     return (
       <div className="chip chip-ok" data-testid="validation-status" title={validation.summary ?? ""}>
-        ✓ manifest.py: valid{validating ? " …" : ""}
+        ✓ validators: valid{validating ? " …" : ""}
       </div>
     );
   }
@@ -42,7 +42,7 @@ function ValidationChip() {
       </button>
       {open && (
         <div className="dropdown errors-list" data-testid="validation-errors">
-          <div className="dropdown-title">manifest.py validate</div>
+          <div className="dropdown-title">scripts validators</div>
           {validation.errors.map((e) => (
             <button
               key={e.message}

@@ -79,7 +79,7 @@ function useLiveUpdates() {
   }, []);
 }
 
-/** Profiles (from the pipeline's Configs repo) and schemas, for the pickers and the Inspector. */
+/** Profiles (from the pipeline's ConfigRegistry) and model types, for the pickers and the Inspector. */
 async function loadCatalog(configs: Graph["configs"]) {
   try {
     const catalog = await api.catalog(configs);
@@ -88,7 +88,7 @@ async function loadCatalog(configs: Graph["configs"]) {
       useStudio.getState().toast({ kind: "warning", text: `Couldn't read the ${what}: ${error}` }, 10000);
     }
   } catch (e) {
-    useStudio.getState().toast({ kind: "error", text: `Couldn't read profiles and schemas: ${(e as Error).message}` }, 10000);
+    useStudio.getState().toast({ kind: "error", text: `Couldn't read profiles and types: ${(e as Error).message}` }, 10000);
   }
 }
 

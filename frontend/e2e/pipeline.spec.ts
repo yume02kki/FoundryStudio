@@ -28,13 +28,13 @@ test("PacketPipeline draws Input -> XmlToJson -> ConvertedPackets -> Decode, Isp
 
   await expect(page.locator(".react-flow__edge")).toHaveCount(6);
   for (const id of [`${IN}->XmlToJson`, `XmlToJson->${MID}`, `${MID}->Decode`, `${MID}->Isp`, `Decode->${OUT}`, `Isp->${OUT}`]) {
-    await expect(page.getByTestId(`rf__edge-${id}`)).toHaveCount(1);
+    await expect(page.locator(`[data-testid^="rf__edge-${id}|"]`).first()).toHaveCount(1);
   }
   await expect(page.getByTestId("inspector")).toContainText("Select a node or an edge");
-  await expect(page.getByTestId("validation-status")).toContainText("manifest.py: valid");
+  await expect(page.getByTestId("validation-status")).toContainText("validators: valid");
 });
 
-test("wiring a dataset of the wrong schema is refused with manifest.py's message; one In per processor", async ({ page }) => {
+test("wiring a Kafka of the wrong type is refused with the validators' message; one input per dotnet processor", async ({ page }) => {
   await page.goto("/?new=1");
   await expect(page.getByTestId("canvas")).toBeVisible();
   const box = (await page.getByTestId("canvas").boundingBox())!;
@@ -50,48 +50,48 @@ test("wiring a dataset of the wrong schema is refused with manifest.py's message
     await expect(page.getByTestId("port-XmlToJson-in")).toHaveClass(/port-compatible/);
     await expect(page.getByTestId(`port-${OUT}-in`)).toHaveClass(/port-incompatible/);
   });
-  await expect(page.getByTestId(`rf__edge-${IN}->XmlToJson`)).toHaveCount(1);
+  await expect(page.locator(`[data-testid^="rf__edge-${IN}->XmlToJson|"]`).first()).toHaveCount(1);
 
-  // XmlToJson -> Output is refused: tooltip while hovering, manifest.py's message on drop.
+  // XmlToJson -> Output is refused: tooltip while hovering, the validators' message on drop.
   await wire(page, handle(page, "XmlToJson", "out"), handle(page, OUT, "in"), async () => {
     await expect(page.getByTestId(`port-${OUT}-in`)).toHaveClass(/port-incompatible/);
-    await expect(page.getByTestId("drag-tooltip")).toHaveText("XmlToJson writes Packets but Output carries EnrichedPackets");
+    await expect(page.getByTestId("drag-tooltip")).toHaveText("XmlToJson writes Packets but Output allows EnrichedPackets");
   });
   await expect(page.getByTestId("connection-refused")).toContainText(
-    "Processors.XmlToJson.Out: XmlToJson writes Packets but Output carries EnrichedPackets",
+    "Flow: XmlToJson -> Output: XmlToJson writes Packets but Output allows EnrichedPackets",
   );
   await page.locator(".toast .icon-btn").first().click();
-  await expect(page.getByTestId(`rf__edge-XmlToJson->${OUT}`)).toHaveCount(0);
+  await expect(page.locator(`[data-testid^="rf__edge-XmlToJson->${OUT}|"]`).first()).toHaveCount(0);
 
-  // A processor reads one dataset: a second XmlPackets dataset can't feed XmlToJson too.
+  // A dotnet processor reads one Kafka: a second XmlPackets Kafka can't feed XmlToJson too.
   await page.getByTestId("tab-datasets").click();
   await page.getByTestId("add-dataset").click();
   await page.getByTestId("new-dataset-name").fill("Replay");
   await page.getByTestId("new-dataset-topic").fill("raw.xml.replay");
-  await page.getByTestId("new-dataset-schema").selectOption("XmlPackets");
+  await page.getByTestId("new-dataset-types").selectOption(["XmlPackets"]);
   await page.getByTestId("new-dataset-add").click();
   await page.getByTestId("tab-processors").click();
   await expect(page.getByTestId("node-dataset:Replay")).toBeVisible();
   await page.getByTestId("node-dataset:Replay").dragTo(page.getByTestId("canvas"), { targetPosition: { x: box.width * 0.15, y: box.height / 2 + 160 } });
   await wire(page, handle(page, "dataset:Replay", "out"), handle(page, "XmlToJson", "in"));
-  await expect(page.getByTestId("connection-refused").filter({ hasText: "XmlToJson already reads Input; a processor reads one dataset" })).toHaveCount(1);
+  await expect(page.getByTestId("connection-refused").filter({ hasText: "XmlToJson: already reads Input; a dotnet processor reads one Kafka" })).toHaveCount(1);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
   await dropCard(page, "Isp", box.width * 0.55, box.height / 2 - 150);
 
-  // Processors only connect through a dataset.
+  // Processors only connect through a Kafka.
   await wire(page, handle(page, "XmlToJson", "out"), handle(page, "Isp", "in"));
-  await expect(page.getByTestId("connection-refused").filter({ hasText: "processors connect through a dataset" })).toHaveCount(1);
+  await expect(page.getByTestId("connection-refused").filter({ hasText: "processors connect through a Kafka" })).toHaveCount(1);
   await expect(page.locator(".react-flow__edge")).toHaveCount(1);
 });
 
-test("a connection shows its topic, consumer group and profile; dataset edits are saved to the manifest", async ({ page }) => {
+test("a connection shows its topic, consumer group and profile; Kafka edits are saved to the manifest", async ({ page }) => {
   await page.goto("/?pipeline=PacketPipeline");
   await expect(page.getByTestId("node-XmlToJson")).toBeVisible();
   // Let the canvas finish its fit-to-view animation, or a click can land beside the edge.
   await expect(page.getByTestId("validation-status")).toContainText("valid");
   await page.waitForTimeout(400);
 
-  await page.getByTestId(`rf__edge-${IN}->XmlToJson`).click({ force: true });
+  await page.locator(`[data-testid^="rf__edge-${IN}->XmlToJson|"]`).first().click({ force: true });
   await expect(page.getByTestId("edge-topic")).toHaveValue("raw.xml");
   await expect(page.getByTestId("edge-group")).toHaveValue("EnrichmentPipeline.XmlToJson");
   await expect(page.getByTestId("profile-settings")).toContainText("kafka-internal:9092");
@@ -105,8 +105,8 @@ test("a connection shows its topic, consumer group and profile; dataset edits ar
   await page.getByTestId("save").click();
   await expect(page.getByTestId("saved")).toBeVisible();
   const saved = await (await page.request.get("/api/pipelines/PacketPipeline")).json();
-  expect(saved.manifest).toContain("    Config: kafka/load\n    DataSchema: EnrichedPackets\n    Topic: packets.enriched.v2\n");
-  expect(saved.manifest).not.toContain("Brokers"); // profiles stay in the configs repo
+  expect(saved.manifest).toContain("    Config: kafka/load\n    AllowedTypes: [EnrichedPackets]\n    Topic: packets.enriched.v2\n");
+  expect(saved.manifest).not.toContain("Brokers"); // profiles stay in configRegistry
 
   // Put it back for the other tests.
   await page.getByTestId("dataset-topic").fill("packets.enriched");
@@ -115,7 +115,7 @@ test("a connection shows its topic, consumer group and profile; dataset edits ar
   await expect(page.getByTestId("saved").last()).toBeVisible();
 });
 
-test("a new pipeline with a new dataset is saved to its own folder", async ({ page }) => {
+test("a new pipeline with a new Kafka is saved to its own folder", async ({ page }) => {
   await page.goto("/?new=1");
   await page.getByTestId("pipeline-name").fill("Audit");
   await page.getByTestId("tab-datasets").click();
@@ -123,19 +123,18 @@ test("a new pipeline with a new dataset is saved to its own folder", async ({ pa
   await page.getByTestId("new-dataset-name").fill("Audit");
   await page.getByTestId("new-dataset-topic").fill("packets.audit");
   await page.getByTestId("new-dataset-profile").selectOption("kafka/load");
-  await page.getByTestId("new-dataset-schema").selectOption("Packets");
+  await page.getByTestId("new-dataset-types").selectOption(["Packets"]);
   await page.getByTestId("new-dataset-add").click();
   await expect(page.getByTestId("node-dataset:Audit")).toBeVisible();
   await expect(page.getByTestId("dataset-card-Audit")).toContainText("packets.audit");
 
   await page.getByTestId("node-dataset:Audit").click();
-  await expect(page.getByTestId("dataset-schema")).toHaveValue("Packets");
-  await expect(page.getByTestId("dataset-fields")).toContainText("guid");
+  await expect(page.getByTestId("dataset-types")).toHaveValues(["Packets"]);
 
   await page.getByTestId("save").click();
   await expect(page.getByTestId("saved")).toBeVisible();
   await expect(page).toHaveURL(/pipeline=Audit/);
   const saved = await (await page.request.get("/api/pipelines/Audit")).json();
   expect(saved.manifest).toContain("Name: Audit\n");
-  expect(saved.manifest).toContain("DataSets:\n  Audit:\n    Type: Kafka\n    Config: kafka/load\n    DataSchema: Packets\n    Topic: packets.audit\n");
+  expect(saved.manifest).toContain("Kafkas:\n  Audit:\n    Config: kafka/load\n    AllowedTypes: [Packets]\n    Topic: packets.audit\n");
 });

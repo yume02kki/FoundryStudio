@@ -36,14 +36,19 @@ export function findInfo(spec: Processorspec | undefined, infos: Iterable<Proces
   return undefined;
 }
 
-/** The default-branch version: what a processor without a Ref runs (foundry: no Ref = HEAD). */
+/** The default-branch version: what a processor without a Ref, or with Ref: <default branch>, runs. */
 export function headVersion(info: ProcessorInfo | undefined): Version | undefined {
   return info?.versions.find((v) => v.kind === "branch");
 }
 
+/** Whether ref follows the default branch: none, HEAD, or the branch's name (e.g. main). */
+export function followsBranch(info: ProcessorInfo | undefined, ref: string | undefined): boolean {
+  return !ref || ref === "HEAD" || ref === headVersion(info)?.label.split("@")[0];
+}
+
 export function versionFor(info: ProcessorInfo | undefined, ref: string | undefined): Version | undefined {
   if (!info) return undefined;
-  if (!ref || ref === "HEAD") return headVersion(info);
+  if (!ref || followsBranch(info, ref)) return headVersion(info);
   return info.versions.find((v) => v.ref === ref) ?? info.versions.find((v) => v.commit.startsWith(ref));
 }
 
@@ -53,8 +58,8 @@ export function versionFor(info: ProcessorInfo | undefined, ref: string | undefi
  * different commit.
  */
 export function updateFor(info: ProcessorInfo | undefined, ref: string | undefined): Version | undefined {
-  // No Ref follows the default branch, so it's always on the latest.
-  if (!info || !ref || ref === "HEAD" || info.versions.length === 0) return undefined;
+  // Following the default branch is always on the latest.
+  if (!info || !ref || followsBranch(info, ref) || info.versions.length === 0) return undefined;
   const newest = info.versions[0];
   const current = versionFor(info, ref);
   if (current?.kind === "tag" || (!current && SEMVER.test(ref))) {

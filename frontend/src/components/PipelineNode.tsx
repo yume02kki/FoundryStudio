@@ -153,7 +153,7 @@ function ProcessorNodeView({ id, data, selected }: NodeProps<PNode>) {
   );
 }
 
-/** One of the pipeline's DataSets (a Kafka topic): processors write into its left side and read from its right. */
+/** One of the pipeline's Kafkas (a topic): processors write into its left side and read from its right. */
 function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
   const name = data.spec.dataset ?? id;
   const validation = useStudio((s) => s.validation);
@@ -181,7 +181,7 @@ function DatasetNodeView({ id, data, selected }: NodeProps<PNode>) {
       {!sockets.length && <Port nodeId={id} port="in" schema={schema} label={false} />}
       <div className="dataset-body">
         <div className="pnode-head">
-          <span className="pnode-kind">≋ Dataset</span>
+          <span className="pnode-kind">≋ Kafka</span>
           <span className="dataset-cluster" data-testid={`profile-${name}`}>
             {spec ? spec.Config ?? "inline" : "not defined"}
           </span>

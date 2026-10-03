@@ -5,12 +5,12 @@ import { schemaColor } from "../lib/schemaColor";
 import { NAME_RE, TOPIC_RE, useStudio, type PEdge, type PNode } from "../store";
 import { datasetNode, type DatasetSpec, type WorkspaceDataset } from "../types";
 import { DATASET_MIME } from "./Canvas";
-import { ANY, schemaLabel } from "../lib/rules";
+import { schemaLabel } from "../lib/rules";
 
 type Filter = { kind: "pipeline" } | { kind: "others" } | { kind: "profile"; profile: string };
 
 /**
- * Put a dataset on the canvas. The same topic already there is just shown; a name already
+ * Put a Kafka on the canvas. The same topic already there is just shown; a name already
  * taken by another topic gets a number.
  */
 export function placeDataset(name: string, spec: DatasetSpec, position: { x: number; y: number }) {
@@ -51,8 +51,8 @@ function Card({ name, spec, note, onCanvas, draggable }: { name: string; spec: D
         {onCanvas && <span className="star">◉</span>}
       </div>
       <div className="card-types">
-        <span className="schema-chip" style={{ borderColor: schemaColor(schemaLabel(spec.DataSchema)), color: schemaColor(schemaLabel(spec.DataSchema)) }}>
-          {schemaLabel(spec.DataSchema) || ANY}
+        <span className="schema-chip" style={{ borderColor: schemaColor(schemaLabel(spec.AllowedTypes)), color: schemaColor(schemaLabel(spec.AllowedTypes)) }}>
+          {schemaLabel(spec.AllowedTypes) || "no types"}
         </span>{" "}
         <span className="muted mono">{spec.Topic ?? "no topic"}</span>
       </div>
@@ -64,7 +64,7 @@ function Card({ name, spec, note, onCanvas, draggable }: { name: string; spec: D
   );
 }
 
-/** The pipeline's datasets, those other pipelines define (drag one in to reuse its topic), and the connection profiles. */
+/** The pipeline's Kafkas, those other pipelines define (drag one in to reuse its topic), and the connection profiles. */
 export function Datasets() {
   const catalog = useStudio((s) => s.catalog);
   const nodes = useStudio((s) => s.nodes);
@@ -85,7 +85,7 @@ export function Datasets() {
   );
   const topicsHere = new Set(mine.map((d) => d.spec.Topic).filter(Boolean));
   const folder = origin.kind === "saved" ? origin.folder : null;
-  // Other pipelines' datasets, one per topic, minus those already here.
+  // Other pipelines' Kafkas, one per topic, minus those already here.
   const reusable = others.filter(
     (d, i) => d.folder !== folder && !topicsHere.has(d.spec.Topic) && others.findIndex((o) => o.spec.Topic === d.spec.Topic) === i,
   );
@@ -94,7 +94,7 @@ export function Datasets() {
   const q = query.trim().toLowerCase();
   const matches = (name: string, spec: DatasetSpec) =>
     (filter.kind !== "profile" || spec.Config === filter.profile) &&
-    (!q || [name, spec.Topic, spec.DataSchema, spec.Config].some((v) => String(v ?? "").toLowerCase().includes(q)));
+    (!q || [name, spec.Topic, schemaLabel(spec.AllowedTypes), spec.Config].some((v) => String(v ?? "").toLowerCase().includes(q)));
 
   const center = () => {
     const box = document.querySelector(".canvas")?.getBoundingClientRect();
@@ -136,7 +136,7 @@ export function Datasets() {
         ))}
         <div className="tree-actions">
           <button className="btn btn-small" onClick={() => setAdding(true)} data-testid="add-dataset">
-            + Dataset
+            + Kafka
           </button>
         </div>
       </div>
@@ -144,13 +144,13 @@ export function Datasets() {
         <div className="crumbs">
           {title}
           <span className="crumbs-right">
-            <input className="search" placeholder="Search datasets" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="dataset-search" />
+            <input className="search" placeholder="Search Kafkas" value={query} onChange={(e) => setQuery(e.target.value)} data-testid="dataset-search" />
           </span>
         </div>
         {adding && (
           <NewDataset
             profiles={profiles}
-            schemas={Object.keys(catalog?.schemas ?? {})}
+            types={catalog?.types ?? []}
             taken={new Set(mine.map((d) => d.name))}
             defaultProfile={filter.kind === "profile" ? filter.profile : profiles.includes("kafka/prod") ? "kafka/prod" : profiles[0]}
             onCancel={() => setAdding(false)}
@@ -167,7 +167,7 @@ export function Datasets() {
               .filter((d) => matches(d.name, d.spec))
               .map((d) => <Card key={`${d.folder}/${d.name}`} name={d.name} spec={d.spec} note={d.folder} onCanvas={false} draggable />)}
           {(showMine ? mine : []).concat(showOthers ? reusable : []).filter((d) => matches(d.name, d.spec)).length === 0 && (
-            <div className="empty">No datasets here.</div>
+            <div className="empty">No Kafkas here.</div>
           )}
         </div>
       </div>
@@ -177,14 +177,14 @@ export function Datasets() {
 
 function NewDataset({
   profiles,
-  schemas,
+  types,
   taken,
   defaultProfile,
   onAdd,
   onCancel,
 }: {
   profiles: string[];
-  schemas: string[];
+  types: string[];
   taken: Set<string>;
   defaultProfile?: string;
   onAdd: (name: string, spec: DatasetSpec) => void;
@@ -193,7 +193,7 @@ function NewDataset({
   const [name, setName] = useState("");
   const [topic, setTopic] = useState("");
   const [profile, setProfile] = useState(defaultProfile ?? "");
-  const [schema, setSchema] = useState(schemas[0] ?? "");
+  const [allowed, setAllowed] = useState<string[]>([]);
   const error = name && !NAME_RE.test(name)
     ? "invalid name"
     : taken.has(name)
@@ -201,14 +201,14 @@ function NewDataset({
       : topic && !TOPIC_RE.test(topic)
         ? "not a valid Kafka topic name"
         : null;
-  const ready = name && topic && profile && schema && !error;
+  const ready = name && topic && profile && allowed.length && !error;
   return (
     <form
       className="inline-form"
       data-testid="new-dataset"
       onSubmit={(e) => {
         e.preventDefault();
-        if (ready) onAdd(name, { Type: "Kafka", Config: profile, DataSchema: schema, Topic: topic });
+        if (ready) onAdd(name, { Config: profile, AllowedTypes: allowed, Topic: topic });
       }}
     >
       <span className="note">The topic must already exist; nothing here creates one.</span>
@@ -219,8 +219,14 @@ function NewDataset({
           <option key={p}>{p}</option>
         ))}
       </select>
-      <select value={schema} onChange={(e) => setSchema(e.target.value)} data-testid="new-dataset-schema">
-        {[ANY, ...schemas].map((c) => (
+      <select
+        multiple
+        value={allowed}
+        title="AllowedTypes: the types written here (ctrl-click for several)"
+        onChange={(e) => setAllowed([...e.target.selectedOptions].map((o) => o.value))}
+        data-testid="new-dataset-types"
+      >
+        {types.map((c) => (
           <option key={c}>{c}</option>
         ))}
       </select>

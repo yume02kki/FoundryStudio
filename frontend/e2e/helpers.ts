@@ -28,7 +28,7 @@ export async function dropCard(page: Page, name: string, x: number, y: number) {
   await page.getByTestId(`card-${name}`).dragTo(page.getByTestId("canvas"), { targetPosition: { x, y } });
 }
 
-/** Drop another pipeline's dataset (Datasets tab, Other pipelines) onto the canvas, relative to its top-left corner. */
+/** Drop another pipeline's Kafka (Kafkas tab, Other pipelines) onto the canvas, relative to its top-left corner. */
 export async function dropDataset(page: Page, folder: string, name: string, x: number, y: number) {
   await page.getByTestId("tab-datasets").click();
   await page.getByTestId("other-datasets").click();

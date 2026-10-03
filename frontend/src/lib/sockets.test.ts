@@ -4,14 +4,14 @@ import type { Processors } from "./rules";
 import { inputSockets, moveSocket, ordered, outputSockets, wires } from "./sockets";
 
 const info = (name: string, input: string, output: string): ProcessorInfo => {
-  const v = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "processor.yaml", warnings: [], web_url: "" };
-  return { id: `x/${name}:`, project: `x/${name}`, path: "", name, description: "", repo: `https://gitlab.com/x/${name}.git`, web_url: "", input, output, warnings: [], latest: "abc", head: "abc", versions: [v] };
+  const v = { ref: "abc", label: "main@abc", kind: "branch" as const, commit: "abc", committed_date: null, input, output, source: "processor.yaml", warnings: [], web_url: "", runtime: "dotnet" as const };
+  return { id: `x/${name}:`, project: `x/${name}`, path: "", name, description: "", repo: `https://gitlab.com/x/${name}.git`, web_url: "", input, output, warnings: [], latest: "abc", head: "abc", versions: [v], runtime: "dotnet" };
 };
 const processors: Processors = Object.fromEntries(
   [info("join", "Packets | DecodeEnrichment | IspEnrichment", "EnrichedPackets"), info("decode", "Packets", "DecodeEnrichment")].map((i) => [i.id, i]),
 );
 const p = (repo: string): GraphNode => ({ id: repo, kind: "processor", processor: { Repo: `https://gitlab.com/x/${repo}.git` } });
-const d = (name: string, DataSchema: string | string[]): GraphNode => ({ id: `dataset:${name}`, kind: "dataset", dataset: name, datasetSpec: { Type: "Kafka", DataSchema, Topic: name } });
+const d = (name: string, types: string | string[]): GraphNode => ({ id: `dataset:${name}`, kind: "dataset", dataset: name, datasetSpec: { AllowedTypes: Array.isArray(types) ? types : [types], Topic: name } });
 
 describe("sockets", () => {
   it("one per schema where there are several, else a single one", () => {

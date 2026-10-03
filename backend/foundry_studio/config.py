@@ -23,17 +23,19 @@ class Settings:
     poll_interval: float = 10.0
     # Full rescan even without events, to catch anything the events API missed.
     full_rescan_interval: float = 300.0
-    # Checkout of foundry-platform/common/scripts at the pinned commit (git submodule): manifest.py.
+    # Checkout of foundry-platform/common/scripts at the pinned commit (git submodule): its validators.
     scripts_dir: Path = REPO_ROOT / "vendor" / "scripts"
     # The pipelines Studio edits: <workspace>/<folder>/PipelineManifest.yaml, one folder (a
     # pipeline repo checkout, ideally) per pipeline. None: <repo>/workspace (or the demo's).
     workspace: Path | None = None
     # The pipelines repo, one folder per pipeline; the workspace is kept a checkout of it. None: the
     # workspace is a plain folder (the default with a fake GitLab).
-    pipelines_repo: str | None = "https://gitlab.com/foundry-platform/foundry-pipelines.git"
-    # Connection profiles (kafka/<name>.yaml) and schemas (schemas/*.yaml) for manifests without
-    # Configs.Repo, and new ones; the schemas here are also what processor.yaml files are checked against.
-    configs_repo: str = "https://gitlab.com/foundry-platform/common/configs.git"
+    pipelines_repo: str | None = "https://gitlab.com/foundry-platform/pipelines.git"
+    # Connection profiles (kafka/<name>.json) for manifests without ConfigRegistry.Repo, and new ones.
+    configs_repo: str = "https://gitlab.com/foundry-platform/common/configRegistry.git"
+    # foundry-common: the classes in src/Foundry.Common.Models are the type names AllowedTypes and
+    # processor.yaml in/out may use.
+    models_repo: str = "https://gitlab.com/foundry-platform/common/foundry-common.git"
     # "demo" or a directory: serve GitLab from local git repos instead of gitlab.com.
     fake_gitlab: str | None = None
     # Kafka credentials for the live feed, laid out like the processor runtime's:
@@ -66,6 +68,7 @@ class Settings:
         if env.get("STUDIO_WORKSPACE"):
             s.workspace = Path(env["STUDIO_WORKSPACE"]).expanduser().resolve()
         s.configs_repo = env.get("STUDIO_CONFIGS_REPO", s.configs_repo)
+        s.models_repo = env.get("STUDIO_MODELS_REPO", s.models_repo)
         s.fake_gitlab = env.get("STUDIO_FAKE_GITLAB") or None
         if "STUDIO_PIPELINES_REPO" in env or s.fake_gitlab:
             s.pipelines_repo = env.get("STUDIO_PIPELINES_REPO") or None

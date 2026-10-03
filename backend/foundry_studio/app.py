@@ -22,7 +22,7 @@ from .fake_gitlab import FakeGitLab
 from .foundry import Foundry
 from .gitlab import GitLab, HttpGitLab
 from .manifest import graph_to_manifest
-from .peek import PeekError, bind, checker_for, client_config, demo_feed, kafka_feed
+from .peek import PeekError, TypeChecker, bind, client_config, demo_feed, kafka_feed
 from .pipelines import PipelineError, PipelineStore, PipelineSync
 from .sources import SourceError, Sources
 from .validation import Validator, declarations
@@ -42,7 +42,7 @@ class SaveBody(BaseModel):
 
 class PeekBody(BaseModel):
     graph: dict
-    node: str  # a dataset node, or a processor (the dataset it writes)
+    node: str  # a Kafka node, or a processor (the Kafka it writes)
 
 
 class EdgeBody(BaseModel):
@@ -62,8 +62,8 @@ class Services:
         self.workspace = workspace or settings.workspace or REPO_ROOT / "workspace"
         self.validator = Validator(foundry)
         self.pipelines = PipelineStore(self.workspace)
-        self.sources = Sources(gitlab, settings.gitlab_url, foundry.manifest, settings.configs_repo)
-        self.discovery = Discovery(gitlab, lambda: self.sources.schema_names)
+        self.sources = Sources(gitlab, settings.gitlab_url, foundry.pipeline, settings.configs_repo, settings.models_repo)
+        self.discovery = Discovery(gitlab, lambda: self.sources.type_names)
         self.peeks = asyncio.Semaphore(8)  # concurrent live feeds
         self.watcher = Watcher(gitlab, self.discovery, self.bus, settings.processor_projects,
                                settings.poll_interval, settings.full_rescan_interval,
@@ -72,18 +72,18 @@ class Services:
                                if settings.pipelines_repo else None)
 
     async def context(self, graph: dict) -> dict:
-        """What validating a graph needs besides the graph: profiles, schemas, processor.yaml schemas."""
+        """What validating a graph needs besides the graph: profiles, model types, processor.yaml files."""
         configs = graph.get("configs") or {}
-        ctx: dict = {"configs": None, "configs_error": None, "schemas": None,
+        ctx: dict = {"configs": None, "configs_error": None, "types": None,
                      "decls": declarations(graph, self.watcher.processors.values())}
         try:
             ctx["configs"] = await self.sources.configs(configs.get("Repo"), configs.get("Ref"))
         except SourceError as e:
             ctx["configs_error"] = str(e)
         try:
-            ctx["schemas"] = await self.sources.schemas()
+            ctx["types"] = await self.sources.types()
         except SourceError:
-            pass  # DataSchema names go unchecked rather than all flagged
+            pass  # AllowedTypes go unchecked rather than all flagged
         return ctx
 
 
@@ -146,9 +146,9 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
     async def lifespan(app: FastAPI):
         svc = app.state.services = services or build_services(Settings.from_env())
         try:
-            await svc.sources.schemas()  # before discovery, so it can flag unknown schemas
+            await svc.sources.types()  # before discovery, so it can flag unknown types
         except SourceError as e:
-            log.warning("can't read the schemas from %s: %s", svc.settings.configs_repo, e)
+            log.warning("can't read the model types from %s: %s", svc.settings.models_repo, e)
         if start_watcher:
             await svc.watcher.start()
         yield
@@ -175,25 +175,25 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
             "scriptsCommit": s.foundry.commit,
             "workspace": str(s.workspace),
             "configsRepo": s.settings.configs_repo,
-            "schemasRepo": s.settings.configs_repo,
+            "modelsRepo": s.settings.models_repo,
             "processorProjects": s.watcher.projects_with_processors,
             "watcher": s.watcher.status(),
         }
 
     @app.get("/api/catalog")
     async def catalog(request: Request, repo: str | None = None, ref: str | None = None):
-        """What manifests can refer to (read-only): connection profiles and schemas."""
+        """What manifests can refer to (read-only): connection profiles and model types."""
         s = svc(request)
-        out: dict = {"profiles": {}, "schemas": {}, "configs": None, "errors": {}}
+        out: dict = {"profiles": {}, "types": [], "configs": None, "errors": {}}
         try:
             c = await s.sources.configs(repo, ref)
             out["profiles"], out["configs"] = c["profiles"], {k: c[k] for k in ("repo", "ref", "commit")}
         except SourceError as e:
             out["errors"]["configs"] = str(e)
         try:
-            out["schemas"] = {k: {f: v[f] for f in ("file", "format", "fields")} for k, v in (await s.sources.schemas()).items()}
+            out["types"] = await s.sources.types()
         except SourceError as e:
-            out["errors"]["schemas"] = str(e)
+            out["errors"]["types"] = str(e)
         return out
 
     @app.get("/api/processors")
@@ -210,7 +210,8 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
 
     @app.get("/api/template")
     async def template(request: Request):
-        return {"name": "", "configs": {"Repo": svc(request).settings.configs_repo}, "nodes": [], "edges": [], "extra": {}}
+        return {"name": "", "configs": {"Repo": svc(request).settings.configs_repo, "Ref": "main"},
+                "nodes": [], "edges": [], "extra": {}}
 
     @app.get("/api/pipelines")
     async def list_pipelines(request: Request):
@@ -241,7 +242,7 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
     async def validate(body: GraphBody, request: Request):
         s = svc(request)
         ctx = await s.context(body.graph)
-        return await asyncio.to_thread(s.validator.validate, body.graph, ctx["configs"], ctx["schemas"],
+        return await asyncio.to_thread(s.validator.validate, body.graph, ctx["configs"], ctx["types"],
                                        ctx["decls"], ctx["configs_error"])
 
     @app.post("/api/check-edge")
@@ -249,25 +250,23 @@ def create_app(services: Services | None = None, start_watcher: bool = True) -> 
         s = svc(request)
         ctx = await s.context(body.graph)
         return await asyncio.to_thread(s.validator.check_edge, body.graph, body.source, body.target,
-                                       ctx["configs"], ctx["schemas"], ctx["decls"])
+                                       ctx["configs"], ctx["types"], ctx["decls"])
 
     @app.post("/api/peek")
     async def peek(body: PeekBody, request: Request):
-        """Server-Sent Events: a read-only live feed of a dataset (see peek.py).
+        """Server-Sent Events: a read-only live feed of a Kafka (see peek.py).
 
-        node is a dataset node, or a processor (the dataset it writes)."""
+        node is a Kafka node, or a processor (the Kafka it writes)."""
         s = svc(request)
         ctx = await s.context(body.graph)
         try:
             ep = s.validator.endpoint(body.graph, body.node, ctx["configs"])
         except ValueError as e:
             raise HTTPException(400, str(e))
-        topic, ontology = ep["topic"], ep["schema"]
-        names = [str(n) for n in ontology] if isinstance(ontology, list) else [str(ontology)] if ontology else []
-        checker = checker_for(names, ctx["schemas"] or {})
+        topic, names = ep["topic"], ep["types"]
+        checker = TypeChecker(names)
         info = {"endpoint": ep["endpoint"], "dataset": ep["dataset"], "topic": topic,
-                "schema": " | ".join(names) or None,
-                "cluster": ep["cluster"]}
+                "schema": checker.label, "cluster": ep["cluster"]}
 
         stop = asyncio.Event()
         if s.fake_root:
